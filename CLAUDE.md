@@ -203,3 +203,42 @@ Construire dans cet ordre strict :
 
 Ne jamais passer à l'étape N+1 sans tester l'étape N.
 
+## Déploiement (serveur DigitalOcean)
+
+* **Serveur** : DigitalOcean 512 MB RAM, IP `146.190.31.71`, user `root`
+* **Le bot tourne 24/7** sur le serveur via systemd (`cryptobot.service`)
+* **Tout est servi sur le port 8000** : API + WebSocket + Dashboard React (fichiers statiques via FastAPI)
+* **Dashboard** : `http://146.190.31.71:8000`
+* **Projet installé dans** `/opt/cryptobot` (user système `cryptobot`)
+* **Le .env sur le serveur** contient les vraies clés API (pas dans git)
+
+### Déployer un changement
+
+Après chaque modification du code, lancer depuis PowerShell :
+
+```powershell
+.\scripts\deploy.ps1
+```
+
+Ce script fait : `git push` → SSH sur le serveur → `git pull` → rebuild dashboard → restart service.
+
+### Commandes utiles sur le serveur (via SSH)
+
+```bash
+ssh root@146.190.31.71                          # Se connecter
+systemctl status cryptobot                       # Statut du bot
+systemctl restart cryptobot                      # Redémarrer
+journalctl -u cryptobot -f                       # Logs en direct
+sudo /opt/cryptobot/scripts/server-update.sh     # Mise à jour manuelle
+```
+
+### Modifier le .env sur le serveur
+
+Le `.env` n'est PAS dans git. Pour changer une valeur (paires, capital, etc.) :
+
+```bash
+ssh root@146.190.31.71
+nano /opt/cryptobot/.env
+systemctl restart cryptobot
+```
+
