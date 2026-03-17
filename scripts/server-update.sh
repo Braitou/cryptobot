@@ -1,40 +1,46 @@
 #!/usr/bin/env bash
 # ============================================================
-# server-update.sh — Mise à jour du serveur depuis GitHub
-# Placé sur le serveur dans /opt/cryptobot/scripts/
-# Usage : sudo /opt/cryptobot/scripts/server-update.sh
+# server-update.sh — Mise a jour du serveur depuis GitHub
+# Usage : bash /opt/cryptobot/scripts/server-update.sh
 # ============================================================
 set -euo pipefail
 
 APP_DIR="/opt/cryptobot"
 cd "$APP_DIR"
 
-echo "=== CryptoBot — Mise à jour ==="
+echo "=== CryptoBot — Mise a jour ==="
+
+# 0. Sauvegarder le .env (pas dans git)
+cp "$APP_DIR/.env" /tmp/cryptobot_env_backup
 
 # 1. Pull depuis GitHub
-echo "[1/4] Pull depuis GitHub..."
+echo "[1/5] Pull depuis GitHub..."
 git fetch origin main
 git reset --hard origin/main
-echo "  → Code mis à jour"
+echo "  OK"
 
-# 2. Dépendances Python (si requirements.txt a changé)
-echo "[2/4] Dépendances Python..."
+# 1b. Restaurer le .env
+cp /tmp/cryptobot_env_backup "$APP_DIR/.env"
+echo "[2/5] .env restaure"
+
+# 3. Dependances Python
+echo "[3/5] Dependances Python..."
 "$APP_DIR/venv/bin/pip" install -r requirements.txt -q 2>&1 | tail -1
-echo "  → OK"
+echo "  OK"
 
-# 3. Rebuild dashboard (si frontend a changé)
-echo "[3/4] Rebuild dashboard..."
+# 4. Rebuild dashboard
+echo "[4/5] Rebuild dashboard..."
 cd "$APP_DIR/dashboard"
 npm ci --production=false --loglevel=error 2>&1 | tail -1 || true
 npm run build 2>&1 | tail -3
 cd "$APP_DIR"
-echo "  → Dashboard rebuilt"
+echo "  OK"
 
-# 4. Permissions + restart
-echo "[4/4] Restart service..."
+# 5. Permissions + restart
+echo "[5/5] Restart service..."
 chown -R cryptobot:cryptobot "$APP_DIR"
 systemctl restart cryptobot
-sleep 3
+sleep 4
 
 if systemctl is-active --quiet cryptobot; then
     echo ""
@@ -42,6 +48,6 @@ if systemctl is-active --quiet cryptobot; then
     systemctl status cryptobot --no-pager | head -5
 else
     echo ""
-    echo "=== ERREUR — Le service n'a pas démarré ==="
+    echo "=== ERREUR ==="
     journalctl -u cryptobot -n 20 --no-pager
 fi
