@@ -104,7 +104,7 @@ export default function App() {
   const [feedEvents, setFeedEvents] = useState([])
   const [wsConnected, setWsConnected] = useState(false)
 
-  // Charger l'historique du feed au démarrage
+  // Charger l'historique du feed au démarrage + peupler les prix
   useEffect(() => {
     fetch('/api/feed')
       .then(r => r.ok ? r.json() : [])
@@ -112,6 +112,16 @@ export default function App() {
         const converted = events.map(msg => wsMessageToFeedEvent(msg)).filter(Boolean)
         if (converted.length > 0) {
           setFeedEvents(converted)
+        }
+        // Extraire le dernier prix de chaque paire depuis l'historique
+        const prices = {}
+        for (const msg of events) {
+          if (msg.type === 'candle_closed' && msg.data?.pair && msg.data?.close) {
+            prices[msg.data.pair] = { price: msg.data.close, direction: null }
+          }
+        }
+        if (Object.keys(prices).length > 0) {
+          setLivePrices(prices)
         }
       })
       .catch(() => {})
