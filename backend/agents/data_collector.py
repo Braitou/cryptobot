@@ -143,7 +143,7 @@ class DataCollector(BaseAgent):
         )
 
         await self.publish("candle_closed", {"pair": pair, "interval": interval, **candle})
-        logger.debug("Candle {} {} — close={}", pair, interval, candle["close"])
+        logger.info("Candle fermée {} {} — close={}", pair, interval, candle["close"])
 
     async def _on_orderbook(self, pair: str, data: dict[str, Any]) -> None:
         """Met à jour le cache orderbook en mémoire."""

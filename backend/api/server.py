@@ -47,6 +47,8 @@ class WebSocketManager:
                 dead.append(ws)
         for ws in dead:
             self._connections.remove(ws)
+        if msg.type == "candle_closed":
+            logger.info("WS broadcast {} {} → {} clients", msg.type, msg.data.get("pair", ""), len(self._connections))
 
 
 # Singletons

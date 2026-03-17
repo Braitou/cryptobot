@@ -144,4 +144,27 @@ def create_router(get_orchestrator: Callable) -> APIRouter:
             "testnet": s.BINANCE_TESTNET,
         }
 
+    @router.get("/test-ws")
+    async def test_ws() -> dict[str, str]:
+        """Envoie un faux candle_closed pour tester le WebSocket."""
+        from backend.agents.base import AgentMessage
+
+        o = _orch()
+        msg = AgentMessage(
+            type="candle_closed",
+            data={
+                "pair": "BTCUSDT",
+                "interval": "1m",
+                "open_time": 0,
+                "open": 99000.0,
+                "high": 99100.0,
+                "low": 98900.0,
+                "close": 99050.0,
+                "volume": 1.5,
+            },
+            source="test",
+        )
+        await o._broadcast_ws(msg)
+        return {"status": "sent"}
+
     return router
