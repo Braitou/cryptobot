@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.agents.base import AgentMessage
 from backend.api.routes import create_router
@@ -104,6 +106,13 @@ def create_app() -> FastAPI:
                 await ws.receive_text()
         except WebSocketDisconnect:
             _ws_manager.disconnect(ws)
+
+    # Servir le dashboard React (build statique) en production
+    # Doit être monté APRÈS les routes API pour ne pas les masquer
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+    if dist_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="dashboard")
+        logger.info("Dashboard servi depuis {}", dist_dir)
 
     return app
 
