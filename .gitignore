@@ -1,0 +1,38 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Model artifacts
+models/*.json
+!models/.gitkeep
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dashboard
+dashboard/node_modules/
+dashboard/dist/
+
+# Logs
+logs/
+*.log

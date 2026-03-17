@@ -1,0 +1,32 @@
+# CryptoBot v0.1 — Python Dependencies
+
+# Binance API
+python-binance==1.0.20
+
+# Data & Indicateurs techniques
+pandas==2.2.3
+numpy==1.26.4
+ta==0.11.0
+
+# Claude API (coeur du système — agents IA)
+anthropic==0.43.0
+
+# API & WebSocket
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+
+# Database
+aiosqlite==0.20.0
+
+# Config & Utils
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+loguru==0.7.3
+
+# Dev & Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0
+black==24.10.0
+isort==5.13.2
