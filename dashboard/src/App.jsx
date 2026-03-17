@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import useWebSocket from './hooks/useWebSocket'
 import usePortfolio from './hooks/usePortfolio'
 import Header from './components/Header'
 import MetricCards from './components/MetricCards'
@@ -11,21 +10,7 @@ import MemoryView from './components/MemoryView'
 import AgentStatus from './components/AgentStatus'
 import LiveFeed from './components/LiveFeed'
 
-const MAX_FEED_EVENTS = 100
-const FEED_STORAGE_KEY = 'cryptobot_feed'
-
-function loadFeedFromStorage() {
-  try {
-    const raw = sessionStorage.getItem(FEED_STORAGE_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
-}
-
-function saveFeedToStorage(events) {
-  try {
-    sessionStorage.setItem(FEED_STORAGE_KEY, JSON.stringify(events.slice(-MAX_FEED_EVENTS)))
-  } catch { /* storage full */ }
-}
+const MAX_FEED_EVENTS = 200
 
 function wsMessageToFeedEvent(msg) {
   const ts = msg.timestamp || new Date().toISOString()
@@ -105,6 +90,10 @@ function agentLabel(agent) {
   return labels[agent] || agent || 'Agent'
 }
 
+function getWsUrl() {
+  return 'ws://' + window.location.host + '/ws/live'
+}
+
 export default function App() {
   const { portfolio, trades, memory, agentsCosts, agentsStatus, config, refetch } = usePortfolio()
 
@@ -112,19 +101,133 @@ export default function App() {
   const [lastPrice, setLastPrice] = useState(null)
   const [livePrices, setLivePrices] = useState({})
   const [reasoning, setReasoning] = useState({ analyst: null, decision: null, riskEval: null })
-  const [feedEvents, setFeedEvents] = useState(loadFeedFromStorage)
+  const [feedEvents, setFeedEvents] = useState([])
+  const [wsConnected, setWsConnected] = useState(false)
 
-  const addFeedEvent = useCallback((event) => {
-    if (!event) return
-    setFeedEvents(prev => {
-      const next = [...prev, event]
-      const trimmed = next.length > MAX_FEED_EVENTS ? next.slice(-MAX_FEED_EVENTS) : next
-      saveFeedToStorage(trimmed)
-      return trimmed
-    })
-  }, [])
+  // Refs pour accéder aux dernières valeurs dans le callback WS sans re-render
+  const refetchRef = useRef(refetch)
+  useEffect(() => { refetchRef.current = refetch }, [refetch])
 
-  // Fix 3: Populate reasoning from last agent activity on page load
+  // WebSocket — connexion unique, jamais recréée
+  useEffect(() => {
+    let ws = null
+    let reconnectTimer = null
+
+    function connect() {
+      const url = getWsUrl()
+      console.log('[WS] Connecting to', url)
+      ws = new WebSocket(url)
+
+      ws.onopen = () => {
+        console.log('[WS] Connected')
+        setWsConnected(true)
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          console.log('[WS] Message:', msg.type, msg.data?.pair || '')
+
+          // Feed event
+          const feedEvent = wsMessageToFeedEvent(msg)
+          if (feedEvent) {
+            setFeedEvents(prev => {
+              const next = [...prev, feedEvent]
+              return next.length > MAX_FEED_EVENTS ? next.slice(-MAX_FEED_EVENTS) : next
+            })
+          }
+
+          // State updates
+          switch (msg.type) {
+            case 'candle_closed':
+              if (msg.data?.close) {
+                setLastPrice({
+                  time: Math.floor((msg.data.open_time || Date.now()) / 1000),
+                  open: msg.data.open,
+                  high: msg.data.high,
+                  low: msg.data.low,
+                  close: msg.data.close,
+                })
+                if (msg.data.pair) {
+                  setLivePrices(prev => {
+                    const prevPrice = prev[msg.data.pair]?.price
+                    const direction = prevPrice == null ? null : msg.data.close > prevPrice ? 'up' : msg.data.close < prevPrice ? 'down' : (prev[msg.data.pair]?.direction || null)
+                    return {
+                      ...prev,
+                      [msg.data.pair]: { price: msg.data.close, direction },
+                    }
+                  })
+                }
+              }
+              break
+
+            case 'thinking':
+              if (msg.data?.agent === 'market_analyst') {
+                setReasoning(prev => ({ ...prev, analyst: { thinking: true } }))
+              } else if (msg.data?.agent === 'decision') {
+                setReasoning(prev => ({ ...prev, decision: { thinking: true } }))
+              } else if (msg.data?.agent === 'risk_evaluator') {
+                setReasoning(prev => ({ ...prev, riskEval: { thinking: true } }))
+              }
+              break
+
+            case 'analysis_complete':
+              setReasoning(prev => ({
+                ...prev,
+                analyst: { thinking: false, regime: msg.data?.market_regime, summary: msg.data?.summary },
+              }))
+              break
+
+            case 'decision_made':
+              setReasoning(prev => ({
+                ...prev,
+                decision: { thinking: false, action: msg.data?.action, reasoning: msg.data?.reasoning },
+              }))
+              break
+
+            case 'risk_evaluated':
+              setReasoning(prev => ({
+                ...prev,
+                riskEval: { thinking: false, verdict: msg.data?.verdict, reasoning: msg.data?.reasoning },
+              }))
+              break
+
+            case 'order_executed':
+            case 'order_closed':
+            case 'lesson_learned':
+              refetchRef.current()
+              break
+          }
+        } catch (e) {
+          console.error('[WS] Parse error:', e)
+        }
+      }
+
+      ws.onclose = () => {
+        console.log('[WS] Disconnected, reconnecting in 3s...')
+        setWsConnected(false)
+        ws = null
+        reconnectTimer = setTimeout(connect, 3000)
+      }
+
+      ws.onerror = () => {
+        ws.close()
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (ws) ws.close()
+    }
+  }, []) // Empty deps — created once, never recreated
+
+  // Populate reasoning from last agent activity on page load
   useEffect(() => {
     if (!agentsStatus || Object.keys(agentsStatus).length === 0) return
 
@@ -172,7 +275,6 @@ export default function App() {
       }
     }
 
-    // Only set if at least one agent has data (avoid overwriting live WS data)
     if (newReasoning.analyst || newReasoning.decision || newReasoning.riskEval) {
       setReasoning(prev => ({
         analyst: prev.analyst || newReasoning.analyst,
@@ -181,76 +283,6 @@ export default function App() {
       }))
     }
   }, [agentsStatus])
-
-  const handleWsMessage = useCallback((msg) => {
-    // Feed: add event
-    const feedEvent = wsMessageToFeedEvent(msg)
-    addFeedEvent(feedEvent)
-
-    // Dashboard state updates
-    switch (msg.type) {
-      case 'candle_closed':
-        if (msg.data?.close) {
-          setLastPrice({
-            time: Math.floor((msg.data.open_time || Date.now()) / 1000),
-            open: msg.data.open,
-            high: msg.data.high,
-            low: msg.data.low,
-            close: msg.data.close,
-          })
-          if (msg.data.pair) {
-            setLivePrices(prev => {
-              const prevPrice = prev[msg.data.pair]?.price
-              const direction = prevPrice == null ? null : msg.data.close > prevPrice ? 'up' : msg.data.close < prevPrice ? 'down' : (prev[msg.data.pair]?.direction || null)
-              return {
-                ...prev,
-                [msg.data.pair]: { price: msg.data.close, direction },
-              }
-            })
-          }
-        }
-        break
-
-      case 'thinking':
-        if (msg.data?.agent === 'market_analyst') {
-          setReasoning(prev => ({ ...prev, analyst: { thinking: true } }))
-        } else if (msg.data?.agent === 'decision') {
-          setReasoning(prev => ({ ...prev, decision: { thinking: true } }))
-        } else if (msg.data?.agent === 'risk_evaluator') {
-          setReasoning(prev => ({ ...prev, riskEval: { thinking: true } }))
-        }
-        break
-
-      case 'analysis_complete':
-        setReasoning(prev => ({
-          ...prev,
-          analyst: { thinking: false, regime: msg.data?.market_regime, summary: msg.data?.summary },
-        }))
-        break
-
-      case 'decision_made':
-        setReasoning(prev => ({
-          ...prev,
-          decision: { thinking: false, action: msg.data?.action, reasoning: msg.data?.reasoning },
-        }))
-        break
-
-      case 'risk_evaluated':
-        setReasoning(prev => ({
-          ...prev,
-          riskEval: { thinking: false, verdict: msg.data?.verdict, reasoning: msg.data?.reasoning },
-        }))
-        break
-
-      case 'order_executed':
-      case 'order_closed':
-      case 'lesson_learned':
-        refetch()
-        break
-    }
-  }, [refetch, addFeedEvent])
-
-  const { connected } = useWebSocket(handleWsMessage)
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -309,7 +341,7 @@ export default function App() {
         )}
       </main>
 
-      <AgentStatus agentsStatus={agentsStatus} wsConnected={connected} />
+      <AgentStatus agentsStatus={agentsStatus} wsConnected={wsConnected} />
     </div>
   )
 }
