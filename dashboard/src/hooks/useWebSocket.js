@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
-const WS_URL = import.meta.env.DEV
-  ? `ws://${window.location.hostname}:8000/ws/live`
-  : `ws://${window.location.host}/ws/live`
+function getWsUrl() {
+  const host = window.location.host
+  return 'ws://' + host + '/ws/live'
+}
 const RECONNECT_DELAY = 3000
 
 export default function useWebSocket(onMessage) {
@@ -20,7 +21,7 @@ export default function useWebSocket(onMessage) {
     function connect() {
       if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-      const ws = new WebSocket(WS_URL)
+      const ws = new WebSocket(getWsUrl())
 
       ws.onopen = () => {
         setConnected(true)
