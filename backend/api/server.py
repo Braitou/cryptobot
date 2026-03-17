@@ -20,10 +20,13 @@ from backend.utils.logger import logger
 
 
 class WebSocketManager:
-    """Gère les connexions WebSocket actives."""
+    """Gère les connexions WebSocket actives + buffer des derniers events."""
+
+    MAX_HISTORY = 100
 
     def __init__(self) -> None:
         self._connections: list[WebSocket] = []
+        self._history: list[dict[str, Any]] = []
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -35,10 +38,14 @@ class WebSocketManager:
         logger.info("WS client déconnecté — {} actifs", len(self._connections))
 
     async def broadcast(self, msg: AgentMessage) -> None:
-        """Envoie un message à tous les clients connectés."""
+        """Envoie un message à tous les clients connectés et garde en mémoire."""
+        event = {"type": msg.type, "data": msg.data, "source": msg.source, "timestamp": msg.timestamp}
+        self._history.append(event)
+        if len(self._history) > self.MAX_HISTORY:
+            self._history = self._history[-self.MAX_HISTORY:]
         if not self._connections:
             return
-        payload = json.dumps({"type": msg.type, "data": msg.data, "source": msg.source, "timestamp": msg.timestamp})
+        payload = json.dumps(event)
         dead: list[WebSocket] = []
         for ws in self._connections:
             try:
@@ -47,8 +54,10 @@ class WebSocketManager:
                 dead.append(ws)
         for ws in dead:
             self._connections.remove(ws)
-        if msg.type == "candle_closed":
-            logger.info("WS broadcast {} {} → {} clients", msg.type, msg.data.get("pair", ""), len(self._connections))
+
+    def get_history(self) -> list[dict[str, Any]]:
+        """Retourne les derniers events."""
+        return list(self._history)
 
 
 # Singletons

@@ -104,6 +104,19 @@ export default function App() {
   const [feedEvents, setFeedEvents] = useState([])
   const [wsConnected, setWsConnected] = useState(false)
 
+  // Charger l'historique du feed au démarrage
+  useEffect(() => {
+    fetch('/api/feed')
+      .then(r => r.ok ? r.json() : [])
+      .then(events => {
+        const converted = events.map(msg => wsMessageToFeedEvent(msg)).filter(Boolean)
+        if (converted.length > 0) {
+          setFeedEvents(converted)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   // Refs pour accéder aux dernières valeurs dans le callback WS sans re-render
   const refetchRef = useRef(refetch)
   useEffect(() => { refetchRef.current = refetch }, [refetch])
