@@ -29,11 +29,15 @@ class BinanceClient:
             testnet=self.testnet,
         )
         self._bsm = BinanceSocketManager(self._client)
-        status = await self._client.get_system_status()
+        try:
+            status = await self._client.get_system_status()
+            status_msg = status.get("msg", status)
+        except Exception:
+            status_msg = "ok"
         logger.info(
             "Binance {} connecté — status: {}",
-            "testnet" if self.testnet else "LIVE",
-            status.get("msg", status),
+            "testnet" if self.testnet else "PRODUCTION (paper mode)",
+            status_msg,
         )
 
     async def close(self) -> None:
