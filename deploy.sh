@@ -156,9 +156,10 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/cryptobot/data /opt/cryptobot/logs /opt/cryptobot/backend/memory
 
-# Logs
-StandardOutput=append:/opt/cryptobot/logs/cryptobot.log
-StandardError=append:/opt/cryptobot/logs/cryptobot.log
+# Logs gérés par loguru dans l'app — systemd envoie vers journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cryptobot
 
 [Install]
 WantedBy=multi-user.target
