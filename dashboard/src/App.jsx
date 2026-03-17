@@ -258,7 +258,7 @@ export default function App() {
 
       <main className="flex-1 flex flex-col gap-4 py-4">
         {/* Metric cards — always visible */}
-        <MetricCards portfolio={portfolio} trades={trades} />
+        <MetricCards portfolio={portfolio} trades={trades} config={config} />
         <AIMetricCards trades={trades} agentsCosts={agentsCosts} memory={memory} />
 
         {/* Tab bar */}

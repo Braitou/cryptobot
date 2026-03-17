@@ -19,7 +19,7 @@ function fmtPnl(v) {
   return `${sign}${v.toFixed(2)}`
 }
 
-export default function MetricCards({ portfolio, trades }) {
+export default function MetricCards({ portfolio, trades, config }) {
   if (!portfolio) return null
 
   const capital = portfolio.capital ?? 0
@@ -53,7 +53,7 @@ export default function MetricCards({ portfolio, trades }) {
       />
       <Card
         label="Positions ouvertes"
-        value={`${openPos} / 3`}
+        value={`${openPos} / ${config?.max_open_positions ?? 4}`}
         color="slate"
       />
     </div>
