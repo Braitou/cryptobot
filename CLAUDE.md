@@ -46,7 +46,7 @@ Signal Analyzer détecte score > 0.5 ou < -0.5
 * **Agents IA** : Claude API (Haiku pour le quotidien, Sonnet pour l'hebdo)
 * **Dashboard** : React + lightweight-charts + recharts
 * **DB** : SQLite (trades, candles, logs, mémoire)
-* **Paires** : BTC/USDT, ETH/USDT uniquement
+* **Paires** : BTC/USDT, ETH/USDT, SOL/USDT, AVAX/USDT, LINK/USDT
 
 ## Structure
 
@@ -170,7 +170,7 @@ MAX\_POSITION\_PCT = 0.05          # Plafond absolu : 5% du capital
 STOP\_LOSS\_ATR\_MULT = 1.5        # Stop-loss = 1.5 × ATR
 TAKE\_PROFIT\_ATR\_MULT = 2.0      # Take-profit = 2.0 × ATR
 TRAILING\_STOP\_ATR\_MULT = 1.0    # Trailing activé à 1 × ATR de profit
-MAX\_OPEN\_POSITIONS = 2
+MAX\_OPEN\_POSITIONS = 4
 MAX\_DAILY\_LOSS\_PCT = 0.03       # -3% → stop journée
 MAX\_TOTAL\_DRAWDOWN\_PCT = 0.15   # -15% → arrêt complet
 ```

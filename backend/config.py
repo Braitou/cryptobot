@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     BINANCE_TESTNET: bool = True
 
     # --- Trading ---
-    PAIRS: str = "BTCUSDT,ETHUSDT"
+    PAIRS: str = "BTCUSDT,ETHUSDT,SOLUSDT,AVAXUSDT,LINKUSDT"
     CANDLE_INTERVALS: str = "1m,5m,15m"
     TRADING_MODE: Literal["paper", "live"] = "paper"
     INITIAL_CAPITAL: float = 500.0
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     STOP_LOSS_ATR_MULT: float = 1.5
     TAKE_PROFIT_ATR_MULT: float = 2.0
     TRAILING_STOP_ATR_MULT: float = 1.0
-    MAX_OPEN_POSITIONS: int = 3
+    MAX_OPEN_POSITIONS: int = 4
     MAX_POSITIONS_PER_PAIR: int = 2
     MAX_DAILY_LOSS_PCT: float = 0.03
     MAX_TOTAL_DRAWDOWN_PCT: float = 0.15

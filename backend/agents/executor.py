@@ -34,7 +34,7 @@ class OrderExecutor(BaseAgent):
 
     SLIPPAGE_PCT = 0.0005  # 0.05% slippage simulé (paper)
     FEES_PCT = 0.001  # 0.1% fees (Binance spot)
-    POSITION_TIMEOUT_S = 4 * 3600  # 4h max pour un scalp
+    POSITION_TIMEOUT_S = 90 * 60  # 1h30 max pour un scalp
 
     def __init__(
         self,
