@@ -144,6 +144,7 @@ class Orchestrator:
         self.executor = OrderExecutor(
             binance=self.binance, db=self.db,
             trading_mode=s.TRADING_MODE, bus=self.bus,
+            risk_guard=self.risk_guard,
         )
 
         # News Scraper (Python pur)

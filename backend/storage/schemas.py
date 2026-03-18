@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS trades (
     indicators_snapshot TEXT,
     post_trade_analysis TEXT,
     lesson_learned TEXT,
-    binance_order_id TEXT
+    binance_order_id TEXT,
+    highest_since_entry REAL,
+    max_hold_minutes INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS agent_logs (

@@ -39,7 +39,7 @@ class OrderExecutor(BaseAgent):
     # Frais simulés : 0.10% par côté (taker, sans BNB — worst case)
     # Aller-retour = 0.20%. Avec BNB discount = 0.15%.
     FEES_PCT = 0.001
-    POSITION_TIMEOUT_S = 90 * 60  # 1h30 max pour un scalp
+    DEFAULT_TIMEOUT_S = 90 * 60  # 1h30 fallback si max_hold_minutes absent
 
     def _get_slippage(self, pair: str) -> float:
         """Retourne le slippage simulé selon la liquidité de la paire."""
@@ -51,11 +51,13 @@ class OrderExecutor(BaseAgent):
         db: Database,
         trading_mode: str = "paper",
         bus: asyncio.Queue | None = None,
+        risk_guard: Any = None,
     ) -> None:
         super().__init__(bus=bus)
         self.binance = binance
         self.db = db
         self.trading_mode = trading_mode
+        self.risk_guard = risk_guard
         self._monitor_task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -118,11 +120,14 @@ class OrderExecutor(BaseAgent):
             )
             return ExecutionResult(success=False, trade_id=trade_id, error=str(e))
 
-        # 3. Update open
+        # 3. Update open (+ highest_since_entry + max_hold_minutes)
+        max_hold = decision.get("max_hold_minutes")
         await self.db.execute(
-            """UPDATE trades SET entry_price = ?, quantity = ?, fees_paid = ?, status = 'open'
+            """UPDATE trades SET entry_price = ?, quantity = ?, fees_paid = ?, status = 'open',
+               highest_since_entry = ?, max_hold_minutes = ?
                WHERE id = ?""",
-            (result.entry_price, result.quantity, result.fees, trade_id),
+            (result.entry_price, result.quantity, result.fees,
+             result.entry_price, max_hold, trade_id),
         )
 
         result.trade_id = trade_id
@@ -215,6 +220,19 @@ class OrderExecutor(BaseAgent):
         stop_loss = trade["stop_loss"]
         take_profit = trade["take_profit"]
 
+        # ── Mettre à jour highest_since_entry ──
+        highest = trade.get("highest_since_entry") or entry_price
+        if side == "BUY":
+            new_highest = max(highest, current_price)
+        else:
+            new_highest = min(highest, current_price)
+
+        if new_highest != highest:
+            await self.db.execute(
+                "UPDATE trades SET highest_since_entry = ? WHERE id = ?",
+                (new_highest, trade["id"]),
+            )
+
         close_reason: str | None = None
 
         # SL touché ?
@@ -224,16 +242,28 @@ class OrderExecutor(BaseAgent):
             close_reason = "closed_sl"
 
         # TP touché ?
-        if side == "BUY" and current_price >= take_profit:
-            close_reason = "closed_tp"
-        elif side == "SELL" and current_price <= take_profit:
-            close_reason = "closed_tp"
+        if not close_reason:
+            if side == "BUY" and current_price >= take_profit:
+                close_reason = "closed_tp"
+            elif side == "SELL" and current_price <= take_profit:
+                close_reason = "closed_tp"
 
-        # Timeout (4h)
+        # Trailing stop
+        if not close_reason and self.risk_guard:
+            if self.risk_guard.check_trailing_stop(entry_price, side, current_price, new_highest):
+                close_reason = "closed_trailing"
+                logger.info(
+                    "Trade #{} TRAILING STOP — {} highest={:.2f} current={:.2f}",
+                    trade["id"], pair, new_highest, current_price,
+                )
+
+        # Timeout dynamique (max_hold_minutes du signal, sinon fallback)
         if not close_reason:
             entry_time = datetime.fromisoformat(trade["entry_time"].replace("Z", "+00:00"))
             elapsed = (datetime.now(timezone.utc) - entry_time).total_seconds()
-            if elapsed >= self.POSITION_TIMEOUT_S:
+            max_hold = trade.get("max_hold_minutes")
+            timeout_s = max_hold * 60 if max_hold else self.DEFAULT_TIMEOUT_S
+            if elapsed >= timeout_s:
                 close_reason = "closed_timeout"
 
         if close_reason:
@@ -295,6 +325,10 @@ class OrderExecutor(BaseAgent):
             "fees": round(total_fees, 4),
             "reason": reason,
         })
+
+        # Enregistrer cooldown sur la paire si fermé par SL
+        if reason == "closed_sl" and self.risk_guard:
+            self.risk_guard.register_stop_loss(trade["pair"])
 
         logger.info(
             "Trade #{} FERMÉ — {} {} @ {:.2f} → {:.2f} | Brut={:+.2f}% Net={:+.2f}% (frais={:.2f}%) | {}",

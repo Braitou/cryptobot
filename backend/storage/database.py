@@ -28,8 +28,23 @@ class Database:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.executescript(SCHEMA_SQL)
+        await self._migrate(self._db)
         await self._db.commit()
         logger.info("SQLite connectée — {}", self.path)
+
+    @staticmethod
+    async def _migrate(db: aiosqlite.Connection) -> None:
+        """Migrations incrémentales — ajoute les colonnes manquantes."""
+        cursor = await db.execute("PRAGMA table_info(trades)")
+        columns = {row[1] for row in await cursor.fetchall()}
+
+        if "highest_since_entry" not in columns:
+            await db.execute("ALTER TABLE trades ADD COLUMN highest_since_entry REAL")
+            logger.info("Migration: ajout colonne trades.highest_since_entry")
+
+        if "max_hold_minutes" not in columns:
+            await db.execute("ALTER TABLE trades ADD COLUMN max_hold_minutes INTEGER")
+            logger.info("Migration: ajout colonne trades.max_hold_minutes")
 
     async def close(self) -> None:
         if self._db:

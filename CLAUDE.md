@@ -1,51 +1,63 @@
-# CryptoBot — Bot de trading crypto IA multi-agents
+# CryptoBot v4 — Bot de trading crypto IA regime-driven
 
 ## Projet
 
 Bot de trading crypto **intelligent** sur Binance. Des agents IA (Claude API) raisonnent,
-décident et apprennent de leurs erreurs. Budget trading : 100€. Budget API : \~2€/jour.
+décident et apprennent de leurs erreurs. Budget trading : 500€. Budget API : ~2€/jour.
 Objectif = expérimentation. La perte totale du capital est un scénario accepté.
 
-## Architecture — Deux couches
+## Architecture v4 — Regime-driven
+
+### Principe
+
+L'exécution des trades est **100% Python, déterministe, < 50ms**. L'IA n'est pas dans la
+boucle d'exécution — elle intervient en **stratège asynchrone** (Regime Advisor) toutes les
+60 min ou sur événement urgent.
 
 ### Couche Python (tourne 24/7, coût = 0€)
 
 Mécanique pure, pas d'intelligence :
 
-* **Data Collector** : WebSocket Binance → candles, orderbook, trades
-* **Signal Analyzer** : indicateurs techniques → score -1 à +1
+* **Data Collector** : WebSocket Binance → candles (1m/5m/15m), orderbook, prix. Candles 1H chargées via REST au démarrage pour le RegimeDetector.
+* **Signal Analyzer** : indicateurs techniques → score + classification SCALP/MOMENTUM selon le preset actif
+* **Regime Detector** : ADX + EMA slope sur candles 1H → 4 régimes (RANGING, TRENDING\_UP, TRENDING\_DOWN, HIGH\_VOLATILITY). Tourne toutes les 15 min.
+* **Calendar Guard** : pause automatique avant/après les événements macro (FOMC, CPI, etc.). Retourne un multiplicateur de position (0.0 à 1.0).
+* **Correlation Guard** : limite l'exposition corrélée totale à 15% du capital
 * **Risk Guard** : filet de sécurité codé en dur (limites de risque inviolables)
 * **Executor** : passe les ordres sur Binance (paper ou live)
+* **News Scraper** : collecte Fear & Greed Index, news CryptoCompare, funding rates Binance toutes les 30 min
 
-### Couche IA (Claude API, raisonne réellement)
+### Couche IA (Claude API, stratège asynchrone)
 
-Chaque agent est un **prompt spécialisé** envoyé à Claude Haiku avec un contexte riche :
+* **Regime Advisor** (Haiku) : seul agent IA dans la boucle v4. Appelé toutes les 60 min ou en urgence (BTC > 3% en 30 min). Peut écrire un regime\_override + ajuster position\_size\_multiplier dans config.json.
+* **Post-Trade Logger** (Haiku) : analyse chaque trade fermé, écrit des tags numériques (entry\_quality, exit\_quality, régime) dans la table trade\_tags.
 
-* **Market Analyst Agent** : analyse le contexte global du marché
-* **Decision Agent** : décide d'acheter, vendre ou attendre, avec raisonnement
-* **Risk Evaluator Agent** : challenge la décision, ajuste la position
-* **Post-Trade Learner** : analyse chaque trade fermé, écrit dans la mémoire
-* **Weekly Strategist** (Sonnet) : méta-analyse hebdo, ajuste la stratégie
-
-### Flux d'une décision de trade
+### Flux d'une décision de trade (v4)
 
 ```
-Signal Analyzer détecte score > 0.5 ou < -0.5
-  → Market Analyst (Haiku) : "Voici les données, analyse le contexte"
-    → Decision Agent (Haiku) : "Voici l'analyse + mémoire, on trade ?"
-      → Risk Evaluator (Haiku) : "Voici la décision, est-ce prudent ?"
+RegimeDetector (Python, toutes les 15 min)
+  → Détecte le régime via ADX sur candles 1H
+    → ConfigManager charge le preset correspondant
+
+Signal Analyzer détecte un score sur candle 5m fermée
+  → Classifie le signal (SCALP_LONG / SCALP_SHORT_EXIT / MOMENTUM / NO_SIGNAL)
+    → Calendar Guard : vérifie événements macro → multiplicateur
+      → Correlation Guard : vérifie exposition corrélée
         → Risk Guard (Python) : vérifie limites dures (veto si violation)
           → Executor : passe l'ordre sur Binance
-            → Post-Trade Learner (Haiku, à la clôture) : "Qu'ai-je appris ?"
-              → Mémoire persistante mise à jour
+            → Post-Trade Logger (Haiku, à la clôture) : tags numériques
+
+En parallèle (toutes les 60 min ou sur urgence) :
+Regime Advisor (Haiku) → peut override le régime dans config.json
 ```
 
 ## Stack
 
 * **Backend** : Python 3.11+ (asyncio, FastAPI)
-* **Agents IA** : Claude API (Haiku pour le quotidien, Sonnet pour l'hebdo)
-* **Dashboard** : React + lightweight-charts + recharts
-* **DB** : SQLite (trades, candles, logs, mémoire)
+* **Agents IA** : Claude API (Haiku 4.5 pour le quotidien, Sonnet 4.6 en réserve)
+* **Dashboard** : React + lightweight-charts + recharts + Tailwind
+* **DB** : SQLite (trades, candles, logs, trade\_tags, news\_cache)
+* **Config** : config.json (régime actif + overrides IA) + presets.py (paramètres par régime)
 * **Paires** : BTC/USDT, ETH/USDT, SOL/USDT, AVAX/USDT, LINK/USDT
 
 ## Structure
@@ -53,29 +65,41 @@ Signal Analyzer détecte score > 0.5 ou < -0.5
 ```
 cryptobot/
 ├── CLAUDE.md
-├── PROJECT\_SPEC.md
+├── PROJECT_SPEC.md
 ├── requirements.txt
+├── pyproject.toml
 ├── .env.example
+├── data/
+│   ├── config.json             # Config dynamique (régime, overrides IA, statuts paires)
+│   └── cryptobot.db            # SQLite (trades, candles, logs, tags, news)
 ├── backend/
-│   ├── main.py                 # Orchestrateur (asyncio event loop)
+│   ├── main.py                 # Orchestrateur v4 (asyncio event loop, regime loop)
 │   ├── config.py               # Pydantic Settings, charge .env
+│   ├── config_manager.py       # Lecture/écriture atomique config.json + fallback
+│   ├── presets.py              # Presets par régime (codés en dur, non modifiables par l'IA)
+│   ├── economic_calendar.json  # Calendrier macro (FOMC, CPI, NFP…)
 │   ├── agents/
 │   │   ├── base.py             # BaseAgent + AgentMessage
-│   │   ├── data\_collector.py   # WebSocket Binance → données brutes
-│   │   ├── signal\_analyzer.py  # Indicateurs techniques → score
-│   │   ├── ai\_market\_analyst.py    # Claude Haiku — analyse contexte
-│   │   ├── ai\_decision.py          # Claude Haiku — décide buy/sell/wait
-│   │   ├── ai\_risk\_evaluator.py    # Claude Haiku — challenge la décision
-│   │   ├── ai\_post\_trade.py        # Claude Haiku — apprend de chaque trade
-│   │   ├── ai\_weekly\_strategist.py # Claude Sonnet — stratégie hebdo
-│   │   ├── risk\_guard.py       # Limites dures Python (filet de sécurité)
-│   │   └── executor.py         # Ordres Binance (paper + live)
+│   │   ├── data_collector.py   # WebSocket Binance → candles + orderbook
+│   │   ├── signal_analyzer.py  # Indicateurs techniques → score + classification
+│   │   ├── regime_detector.py  # ADX + EMA slope sur 1H → régime de marché
+│   │   ├── calendar_guard.py   # Pause auto avant événements macro
+│   │   ├── correlation_guard.py # Limite exposition corrélée à 15%
+│   │   ├── risk_guard.py       # Limites dures Python (filet de sécurité)
+│   │   ├── executor.py         # Ordres Binance (paper + live)
+│   │   ├── news_scraper.py     # Fear & Greed, news, funding rates
+│   │   ├── ai_regime_advisor.py    # Claude Haiku — stratège régime (seul IA écrivant config.json)
+│   │   ├── ai_post_trade_logger.py # Claude Haiku — tags numériques post-trade
+│   │   ├── ai_market_analyst.py    # Claude Haiku — analyse contexte (legacy v3)
+│   │   ├── ai_decision.py          # Claude Haiku — décision buy/sell/wait (legacy v3)
+│   │   ├── ai_risk_evaluator.py    # Claude Haiku — challenge décision (legacy v3)
+│   │   └── ai_post_trade.py        # Claude Haiku — learner narratif (legacy v3)
 │   ├── prompts/
-│   │   ├── market\_analyst.py   # Prompt template du Market Analyst
-│   │   ├── decision.py         # Prompt template du Decision Agent
-│   │   ├── risk\_evaluator.py   # Prompt template du Risk Evaluator
-│   │   ├── post\_trade.py       # Prompt template du Post-Trade Learner
-│   │   └── weekly\_strategist.py # Prompt template du Weekly Strategist
+│   │   ├── market_analyst.py
+│   │   ├── decision.py
+│   │   ├── risk_evaluator.py
+│   │   ├── post_trade.py
+│   │   └── weekly_strategist.py
 │   ├── memory/
 │   │   ├── manager.py          # Lecture/écriture mémoire persistante
 │   │   └── memory.md           # Fichier mémoire des agents (leçons apprises)
@@ -83,33 +107,48 @@ cryptobot/
 │   │   ├── server.py           # FastAPI REST + WebSocket
 │   │   └── routes.py           # Endpoints dashboard
 │   ├── storage/
-│   │   ├── database.py         # SQLite wrapper (aiosqlite)
-│   │   └── schemas.py          # Schémas des tables
-│   ├── utils/
-│   │   ├── binance\_client.py   # Wrapper python-binance async
-│   │   ├── claude\_client.py    # Wrapper Anthropic API (Haiku + Sonnet)
-│   │   └── logger.py           # Loguru config
-│   └── tests/
-│       ├── test\_risk\_guard.py
-│       ├── test\_signals.py
-│       └── test\_prompts.py
+│   │   ├── database.py         # SQLite wrapper (aiosqlite), DB dans data/
+│   │   └── schemas.py          # Schémas des tables (candles, trades, agent_logs, trade_tags, news_cache)
+│   └── utils/
+│       ├── binance_client.py   # Wrapper python-binance async (spot uniquement)
+│       ├── claude_client.py    # Wrapper Anthropic API (Haiku + Sonnet)
+│       └── logger.py           # Loguru config
 ├── dashboard/
 │   ├── package.json
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   ├── PriceChart.jsx
-│   │   │   ├── TradeHistory.jsx
-│   │   │   ├── PortfolioStats.jsx
-│   │   │   ├── AgentStatus.jsx
-│   │   │   ├── AgentReasoning.jsx  # Affiche le raisonnement de chaque agent
-│   │   │   └── MemoryView.jsx      # Affiche la mémoire persistante
-│   │   └── hooks/
-│   │       └── useWebSocket.js
-│   └── vite.config.js
+│   ├── vite.config.js
+│   ├── tailwind.config.js
+│   └── src/
+│       ├── App.jsx
+│       ├── main.jsx
+│       ├── index.css
+│       ├── components/
+│       │   ├── Header.jsx
+│       │   ├── MetricCards.jsx         # Métriques principales (capital, P&L, drawdown)
+│       │   ├── PriceChart.jsx          # Chart prix avec lightweight-charts
+│       │   ├── RegimePanel.jsx         # Régime actif + détails ADX
+│       │   ├── RegimeBar.jsx           # Barre compacte du régime
+│       │   ├── GuardsPanel.jsx         # État des garde-fous (calendar, correlation)
+│       │   ├── SignalStats.jsx         # Compteurs signaux filtrés/exécutés
+│       │   ├── OpenPositions.jsx       # Positions ouvertes + P&L non réalisé
+│       │   ├── TradeHistory.jsx        # Historique des trades
+│       │   ├── EquityCurve.jsx         # Courbe d'équité
+│       │   ├── PairWinRate.jsx         # Win rate par paire
+│       │   ├── AtrPanel.jsx            # Valeurs ATR courantes
+│       │   ├── AIFeed.jsx              # Feed décisions IA en temps réel
+│       │   ├── AIMetricCards.jsx        # Coûts et stats IA
+│       │   ├── AgentStatus.jsx         # Statut des agents
+│       │   ├── AgentReasoning.jsx      # Raisonnement détaillé des agents
+│       │   ├── LiveFeed.jsx            # Feed WebSocket temps réel
+│       │   ├── LearningCurve.jsx       # Courbe d'apprentissage
+│       │   ├── MemoryView.jsx          # Mémoire persistante
+│       │   └── KillSwitch.jsx          # Bouton kill switch
+│       └── hooks/
+│           ├── useWebSocket.js
+│           └── usePortfolio.js
 └── scripts/
-    ├── download\_history.py
-    └── paper\_trade.py
+    ├── deploy.ps1              # Déploiement automatisé (git push + SSH + rebuild)
+    ├── server-update.sh        # Script serveur (git pull + restart)
+    └── download_history.py     # Téléchargement historique candles
 ```
 
 ## Conventions de code
@@ -121,23 +160,6 @@ cryptobot/
 * Pydantic pour la validation des données et la config
 * Loguru pour le logging (jamais print())
 * Format : black (100 chars) + isort
-
-```python
-# Exemple : appel à un agent IA
-async def call\_decision\_agent(context: MarketContext, memory: str) -> TradeDecision:
-    prompt = build\_decision\_prompt(context, memory)
-    response = await claude\_client.ask(model="haiku", prompt=prompt)
-    return parse\_decision(response)
-```
-
-```python
-# Exemple : le Risk Guard (Python pur, pas d'IA)
-def check\_hard\_limits(decision: TradeDecision, portfolio: Portfolio) -> bool:
-    """Retourne False si une limite dure est violée. Aucun agent IA ne peut bypass."""
-    if decision.position\_size\_usdt > portfolio.capital \* MAX\_POSITION\_PCT:
-        return False
-    ...
-```
 
 ### Prompts (backend/prompts/)
 
@@ -161,23 +183,77 @@ def check\_hard\_limits(decision: TradeDecision, portfolio: Portfolio) -> bool:
 5. **Stop-loss obligatoire** sur chaque position, sans exception
 6. **Chaque décision IA doit être loggée** — le raisonnement complet est sauvegardé
 7. **Kill switch** : perte jour > 3% OU drawdown > 15% → arrêt immédiat
+8. **config.json dans data/** (writable) — jamais dans backend/ (read-only en production)
 
 ## Gestion du risque
 
 ```python
 # Risk Guard — limites dures (Python, pas d'IA)
-MAX\_POSITION\_PCT = 0.05          # Plafond absolu : 5% du capital
-STOP\_LOSS\_ATR\_MULT = 1.5        # Stop-loss = 1.5 × ATR
-TAKE\_PROFIT\_ATR\_MULT = 2.0      # Take-profit = 2.0 × ATR
-TRAILING\_STOP\_ATR\_MULT = 1.0    # Trailing activé à 1 × ATR de profit
-MAX\_OPEN\_POSITIONS = 4
-MAX\_DAILY\_LOSS\_PCT = 0.03       # -3% → stop journée
-MAX\_TOTAL\_DRAWDOWN\_PCT = 0.15   # -15% → arrêt complet
+MAX_POSITION_PCT = 0.10              # 10% du capital par position
+MAX_OPEN_POSITIONS = 5
+MAX_POSITIONS_PER_PAIR = 1
+MAX_DAILY_LOSS_PCT = 0.03            # -3% → stop journée
+MAX_TOTAL_DRAWDOWN_PCT = 0.15        # -15% → arrêt complet
+
+# Caps SL/TP par mode
+SCALP_MAX_SL_PCT = 0.5%             # Cap SL scalp
+SCALP_MAX_TP_PCT = 1.0%             # Cap TP scalp
+MOMENTUM_MAX_SL_PCT = 2.0%          # Cap SL momentum
+MOMENTUM_MAX_TP_PCT = 3.0%          # Cap TP momentum
+
+# Trailing stop (basé sur %)
+TRAILING_STOP_ACTIVATION_PCT = 0.6%  # Activation à +0.6%
+TRAILING_STOP_DISTANCE_PCT = 0.3%   # Distance trailing 0.3%
+
+# Cooldown
+PAIR_COOLDOWN_AFTER_SL_MINUTES = 15  # 15 min de cooldown après un SL
 ```
 
-Le Risk Evaluator (IA) raisonne sur le risque EN PLUS du Risk Guard.
-Il peut réduire une position ou refuser un trade pour des raisons contextuelles.
-Mais il ne peut JAMAIS dépasser les limites du Risk Guard Python.
+Le Regime Advisor (IA) peut ajuster position\_size\_multiplier (cap 1.5x) et
+écrire un regime\_override temporaire. Mais il ne peut JAMAIS dépasser les
+limites du Risk Guard Python.
+
+## Config dynamique (data/config.json)
+
+Géré par ConfigManager avec écriture atomique (tmp + os.replace) et fallback.
+
+```json
+{
+  "active_regime": "RANGING",
+  "regime_source": "python_adx",
+  "regime_override": null,
+  "regime_override_expires": null,
+  "global": {
+    "trading_enabled": true,
+    "position_size_multiplier": 1.0,
+    "calendar_multiplier": 1.0,
+    "pause_until": null
+  },
+  "pair_status": {
+    "BTCUSDT": "active",
+    "ETHUSDT": "active",
+    "SOLUSDT": "active",
+    "LINKUSDT": "momentum_only",
+    "AVAXUSDT": "momentum_only"
+  }
+}
+```
+
+**Qui écrit dans config.json :**
+* RegimeDetector (Python) → active\_regime
+* Regime Advisor (IA) → regime\_override + position\_size\_multiplier
+* CalendarGuard (Python) → calendar\_multiplier
+
+## Presets par régime (backend/presets.py)
+
+4 presets codés en dur, NON modifiables par l'IA :
+* **RANGING** : scalp mean reversion, pas de momentum
+* **TRENDING\_UP** : scalp réduit + momentum long activé
+* **TRENDING\_DOWN** : scalp inversé + momentum short activé
+* **HIGH\_VOLATILITY** : scalp désactivé, momentum prudent
+
+Chaque preset définit : RSI thresholds, BB thresholds, volume ratio min,
+ATR multiples pour SL/TP, position sizing, paires actives par mode.
 
 ## Mémoire persistante (backend/memory/)
 
@@ -185,23 +261,27 @@ Fichier markdown enrichi par le Post-Trade Learner après chaque trade.
 Injecté dans le prompt de chaque agent IA comme contexte.
 Taille limitée aux 50 dernières leçons pour contrôler les tokens.
 
-## Workflow de développement
+En v4, le Post-Trade Logger ajoute aussi des tags numériques dans la table
+trade\_tags (entry\_quality, exit\_quality, régime, tags JSON).
 
-Construire dans cet ordre strict :
+## Boucle principale (main.py)
 
-1. config.py + .env + database.py + schemas.py (fondations)
-2. claude\_client.py (wrapper API Anthropic)
-3. base.py + data\_collector.py + signal\_analyzer.py (données)
-4. prompts/ (tous les templates de prompt)
-5. memory/manager.py (système de mémoire)
-6. ai\_market\_analyst.py + ai\_decision.py + ai\_risk\_evaluator.py (agents IA)
-7. risk\_guard.py (filet de sécurité Python)
-8. executor.py (paper trading d'abord)
-9. main.py orchestrateur (relie tout)
-10. api/server.py + dashboard React
-11. ai\_post\_trade.py + ai\_weekly\_strategist.py (apprentissage)
+```
+Toutes les 5 min :
+  → Vérifier trigger urgence BTC (> 3% en 30 min → appel Regime Advisor)
 
-Ne jamais passer à l'étape N+1 sans tester l'étape N.
+Toutes les 15 min :
+  → RegimeDetector (ADX sur candles 1H BTCUSDT)
+  → Mise à jour config.json si changement de régime
+
+Toutes les 60 min :
+  → Regime Advisor IA (Haiku) — analyse régime + news + portfolio
+
+En continu :
+  → DataCollector (WebSocket candles + orderbook)
+  → Dispatcher (candle_closed → SignalAnalyzer → Guards → Executor)
+  → Executor monitor (trailing stop, timeouts, SL/TP)
+```
 
 ## Déploiement (serveur DigitalOcean)
 
@@ -222,6 +302,13 @@ Après chaque modification du code, lancer depuis PowerShell :
 
 Ce script fait : `git push` → SSH sur le serveur → `git pull` → rebuild dashboard → restart service.
 
+Ou manuellement :
+
+```bash
+git push
+ssh root@146.190.31.71 "cd /opt/cryptobot && git pull origin main && cd dashboard && npm run build && systemctl restart cryptobot"
+```
+
 ### Commandes utiles sur le serveur (via SSH)
 
 ```bash
@@ -229,7 +316,7 @@ ssh root@146.190.31.71                          # Se connecter
 systemctl status cryptobot                       # Statut du bot
 systemctl restart cryptobot                      # Redémarrer
 journalctl -u cryptobot -f                       # Logs en direct
-sudo /opt/cryptobot/scripts/server-update.sh     # Mise à jour manuelle
+journalctl -u cryptobot --since '1 hour ago'     # Logs récents
 ```
 
 ### Modifier le .env sur le serveur
@@ -241,4 +328,3 @@ ssh root@146.190.31.71
 nano /opt/cryptobot/.env
 systemctl restart cryptobot
 ```
-
