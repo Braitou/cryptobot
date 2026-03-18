@@ -79,4 +79,23 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     times_referenced INTEGER DEFAULT 0,
     active BOOLEAN DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS trade_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER REFERENCES trades(id),
+    timestamp TEXT NOT NULL,
+    tags TEXT NOT NULL,
+    entry_quality REAL,
+    exit_quality REAL,
+    regime_at_entry TEXT,
+    notable_fact TEXT
+);
+
+CREATE TABLE IF NOT EXISTS news_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    source TEXT NOT NULL,
+    data TEXT NOT NULL,
+    UNIQUE(source, timestamp)
+);
 """

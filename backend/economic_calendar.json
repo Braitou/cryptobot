@@ -1,0 +1,60 @@
+{
+  "events": [
+    {
+      "name": "FOMC Rate Decision",
+      "datetime": "2026-03-18T18:00:00Z",
+      "importance": "critical",
+      "pause_before_hours": 2,
+      "pause_after_hours": 1,
+      "reduce_multiplier": 0.0
+    },
+    {
+      "name": "US CPI",
+      "datetime": "2026-04-10T12:30:00Z",
+      "importance": "high",
+      "pause_before_hours": 1,
+      "pause_after_hours": 0.5,
+      "reduce_multiplier": 0.25
+    },
+    {
+      "name": "US NFP (Non-Farm Payrolls)",
+      "datetime": "2026-04-03T12:30:00Z",
+      "importance": "high",
+      "pause_before_hours": 1,
+      "pause_after_hours": 0.5,
+      "reduce_multiplier": 0.25
+    },
+    {
+      "name": "FOMC Rate Decision",
+      "datetime": "2026-04-29T18:00:00Z",
+      "importance": "critical",
+      "pause_before_hours": 2,
+      "pause_after_hours": 1,
+      "reduce_multiplier": 0.0
+    },
+    {
+      "name": "US CPI",
+      "datetime": "2026-05-13T12:30:00Z",
+      "importance": "high",
+      "pause_before_hours": 1,
+      "pause_after_hours": 0.5,
+      "reduce_multiplier": 0.25
+    },
+    {
+      "name": "US NFP (Non-Farm Payrolls)",
+      "datetime": "2026-05-01T12:30:00Z",
+      "importance": "high",
+      "pause_before_hours": 1,
+      "pause_after_hours": 0.5,
+      "reduce_multiplier": 0.25
+    },
+    {
+      "name": "FOMC Rate Decision",
+      "datetime": "2026-06-10T18:00:00Z",
+      "importance": "critical",
+      "pause_before_hours": 2,
+      "pause_after_hours": 1,
+      "reduce_multiplier": 0.0
+    }
+  ]
+}

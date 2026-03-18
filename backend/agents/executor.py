@@ -32,11 +32,18 @@ class OrderExecutor(BaseAgent):
 
     name = "executor"
 
-    SLIPPAGE_PCT = 0.0005  # 0.05% slippage simulé (paper)
+    # Slippage différencié par liquidité
+    SLIPPAGE_MAJOR = 0.0003   # 0.03% pour BTC/ETH/SOL
+    SLIPPAGE_MINOR = 0.0005   # 0.05% pour LINK/AVAX
+    MAJOR_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     # Frais simulés : 0.10% par côté (taker, sans BNB — worst case)
     # Aller-retour = 0.20%. Avec BNB discount = 0.15%.
     FEES_PCT = 0.001
     POSITION_TIMEOUT_S = 90 * 60  # 1h30 max pour un scalp
+
+    def _get_slippage(self, pair: str) -> float:
+        """Retourne le slippage simulé selon la liquidité de la paire."""
+        return self.SLIPPAGE_MAJOR if pair in self.MAJOR_PAIRS else self.SLIPPAGE_MINOR
 
     def __init__(
         self,
@@ -141,14 +148,15 @@ class OrderExecutor(BaseAgent):
     async def _execute_paper(
         self, trade_id: int, pair: str, side: str, quantity: float
     ) -> ExecutionResult:
-        """Paper trading : prix actuel + slippage simulé."""
+        """Paper trading : prix actuel + slippage simulé (différencié par paire)."""
         price = await self.binance.get_price(pair)
+        slippage = self._get_slippage(pair)
 
         # Slippage : BUY → prix légèrement plus haut, SELL → plus bas
         if side == "BUY":
-            entry_price = price * (1 + self.SLIPPAGE_PCT)
+            entry_price = price * (1 + slippage)
         else:
-            entry_price = price * (1 - self.SLIPPAGE_PCT)
+            entry_price = price * (1 - slippage)
 
         fees = quantity * entry_price * self.FEES_PCT
 
@@ -241,12 +249,13 @@ class OrderExecutor(BaseAgent):
         quantity = trade["quantity"]
         side = trade["side"]
 
-        # Slippage de sortie (paper)
+        # Slippage de sortie (paper — différencié par paire)
         if self.trading_mode == "paper":
+            slippage = self._get_slippage(trade["pair"])
             if side == "BUY":
-                exit_price = exit_price * (1 - self.SLIPPAGE_PCT)
+                exit_price = exit_price * (1 - slippage)
             else:
-                exit_price = exit_price * (1 + self.SLIPPAGE_PCT)
+                exit_price = exit_price * (1 + slippage)
 
         # P&L brut (avant frais)
         if side == "BUY":
