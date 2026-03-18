@@ -27,13 +27,25 @@ class Settings(BaseSettings):
 
     # --- Risk Guard (limites dures Python) ---
     MAX_POSITION_PCT: float = 0.10
+    MAX_OPEN_POSITIONS: int = 5
+    MAX_POSITIONS_PER_PAIR: int = 1
+    MAX_DAILY_LOSS_PCT: float = 0.03
+    MAX_TOTAL_DRAWDOWN_PCT: float = 0.15
+    # Caps SL/TP par mode
+    SCALP_MAX_SL_PCT: float = 0.5
+    SCALP_MAX_TP_PCT: float = 1.0
+    MOMENTUM_MAX_SL_PCT: float = 2.0
+    MOMENTUM_MAX_TP_PCT: float = 3.0
+    # Trailing stop (basé sur %) — v3 : élargi pour laisser le trade respirer
+    # Bruit normal candle 5m BTC = 0.1-0.2%, trailing à 0.15% se fait sortir par le bruit
+    TRAILING_STOP_ACTIVATION_PCT: float = 0.6
+    TRAILING_STOP_DISTANCE_PCT: float = 0.3
+    # Cooldown après SL
+    PAIR_COOLDOWN_AFTER_SL_MINUTES: int = 15
+    # Legacy ATR (backward compat)
     STOP_LOSS_ATR_MULT: float = 1.5
     TAKE_PROFIT_ATR_MULT: float = 2.0
     TRAILING_STOP_ATR_MULT: float = 1.0
-    MAX_OPEN_POSITIONS: int = 4
-    MAX_POSITIONS_PER_PAIR: int = 2
-    MAX_DAILY_LOSS_PCT: float = 0.03
-    MAX_TOTAL_DRAWDOWN_PCT: float = 0.15
 
     # --- Claude API ---
     ANTHROPIC_API_KEY: str

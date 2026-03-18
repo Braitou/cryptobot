@@ -33,7 +33,9 @@ class OrderExecutor(BaseAgent):
     name = "executor"
 
     SLIPPAGE_PCT = 0.0005  # 0.05% slippage simulé (paper)
-    FEES_PCT = 0.001  # 0.1% fees (Binance spot)
+    # Frais simulés : 0.10% par côté (taker, sans BNB — worst case)
+    # Aller-retour = 0.20%. Avec BNB discount = 0.15%.
+    FEES_PCT = 0.001
     POSITION_TIMEOUT_S = 90 * 60  # 1h30 max pour un scalp
 
     def __init__(
@@ -79,6 +81,7 @@ class OrderExecutor(BaseAgent):
         now = datetime.now(timezone.utc).isoformat()
 
         # 1. Log pending
+        trade_mode = decision.get("trade_mode", "UNKNOWN")
         cursor = await self.db.execute(
             """INSERT INTO trades
                (pair, side, entry_price, quantity, entry_time, stop_loss, take_profit,
@@ -88,7 +91,7 @@ class OrderExecutor(BaseAgent):
             (
                 pair, side, quantity, now, stop_loss, take_profit,
                 decision.get("signal_score"),
-                decision.get("market_analysis"),
+                trade_mode,  # Stocke le mode (SCALP_AUTO / MOMENTUM_IA) dans market_analysis
                 decision.get("decision_reasoning"),
                 decision.get("risk_evaluation"),
                 json.dumps(decision.get("indicators_snapshot", {})),
@@ -245,16 +248,22 @@ class OrderExecutor(BaseAgent):
             else:
                 exit_price = exit_price * (1 + self.SLIPPAGE_PCT)
 
-        # P&L
+        # P&L brut (avant frais)
         if side == "BUY":
-            pnl = (exit_price - entry_price) * quantity
+            raw_pnl = (exit_price - entry_price) * quantity
         else:
-            pnl = (entry_price - exit_price) * quantity
+            raw_pnl = (entry_price - exit_price) * quantity
 
+        # Frais : entrée (déjà payées) + sortie
         fees_exit = quantity * exit_price * self.FEES_PCT
         total_fees = (trade.get("fees_paid", 0) or 0) + fees_exit
-        pnl_net = pnl - fees_exit
-        pnl_pct = (pnl_net / (entry_price * quantity)) * 100 if entry_price * quantity > 0 else 0
+
+        # P&L net (après tous les frais aller-retour)
+        pnl_net = raw_pnl - fees_exit
+        notional = entry_price * quantity
+        raw_pnl_pct = (raw_pnl / notional) * 100 if notional > 0 else 0
+        pnl_pct = (pnl_net / notional) * 100 if notional > 0 else 0
+        fee_pct = (total_fees / notional) * 100 if notional > 0 else 0
 
         now = datetime.now(timezone.utc).isoformat()
 
@@ -271,14 +280,16 @@ class OrderExecutor(BaseAgent):
             "side": side,
             "entry_price": entry_price,
             "exit_price": round(exit_price, 2),
+            "raw_pnl": round(raw_pnl, 4),
             "pnl": round(pnl_net, 4),
             "pnl_pct": round(pnl_pct, 2),
+            "fees": round(total_fees, 4),
             "reason": reason,
         })
 
         logger.info(
-            "Trade #{} FERMÉ — {} {} @ {:.2f} → {:.2f} | PnL={:+.4f} USDT ({:+.2f}%) | {}",
+            "Trade #{} FERMÉ — {} {} @ {:.2f} → {:.2f} | Brut={:+.2f}% Net={:+.2f}% (frais={:.2f}%) | {}",
             trade["id"], side, trade["pair"],
             entry_price, round(exit_price, 2),
-            round(pnl_net, 4), round(pnl_pct, 2), reason,
+            round(raw_pnl_pct, 2), round(pnl_pct, 2), round(fee_pct, 2), reason,
         )

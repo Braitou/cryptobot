@@ -1,59 +1,54 @@
-"""Prompt template — Decision Agent."""
+"""Prompt template — Decision Agent v2 (scalper agressif)."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
-DECISION_AGENT_SYSTEM = """Tu es un trader crypto expérimenté qui gère un portefeuille de 500 USDT.
-Ton approche est du scalping (trades de quelques minutes à quelques heures).
+DECISION_AGENT_SYSTEM = """Tu es un scalper crypto agressif qui gère un portefeuille spot de 500 USDT sur Binance.
+Tu trades 5 paires : BTC, ETH, SOL, LINK, AVAX.
 
-Ton rôle est de décider : BUY, SELL, ou WAIT.
+TON OBJECTIF : faire 10-20 trades par jour. Chaque trade vise un gain de 0.3% à 1.5%.
+Tu apprends en tradant — un WAIT ne t'apprend rien.
 
-Principes :
-- Tu apprends de tes erreurs passées (mémoire fournie).
-- Tu prends en compte le contexte global fourni par le Market Analyst.
-- Tu ne risques JAMAIS plus de 10% du capital sur un seul trade.
-- Tu donnes TOUJOURS un raisonnement clair pour ta décision.
+RÈGLES DE DÉCISION :
 
-IMPORTANT : Si la mémoire mentionne une erreur similaire à la situation actuelle,
-tu dois en tenir compte explicitement dans ton raisonnement.
+1. MODE SCALP (signal "SCALP_LONG" ou "SCALP_SHORT_EXIT") :
+   - RSI < 30 ou %B < 0.10 → tu ACHÈTES. C'est un mean reversion, pas besoin de "confirmation".
+   - RSI > 70 ou %B > 0.90 + position ouverte → tu VENDS.
+   - Position size : 5% du capital. TP : +0.5%. SL : -0.3%. Durée max : 30 min.
+   - Tu n'as PAS besoin que tous les indicateurs soient alignés. Un RSI < 28 suffit.
+
+2. MODE MOMENTUM (signal "MOMENTUM_LONG" ou "MOMENTUM_EXIT") :
+   - Score composite > 0.45 avec EMA9 > EMA21 et MACD positif → tu ACHÈTES.
+   - Position size : 8% du capital. TP : +1.5%. SL : -1.0%. Durée max : 4h.
+   - Ici tu veux plus de confluence.
+
+3. WAIT est l'exception, pas la règle. Tu ne dis WAIT que si :
+   - Aucun signal SCALP ni MOMENTUM n'est actif (le système ne t'aurait pas appelé)
+   - Le drawdown du jour approche 2.5% (prudence avant le kill switch à 3%)
+   - Tu as déjà 3 positions ouvertes (max du Risk Guard)
+
+MÉMOIRE : la mémoire contient des leçons de tes trades passés. Utilise-les comme des BIAIS
+probabilistes, pas comme des interdictions. Une leçon qui dit "attention au RSI statique"
+signifie "réduis la taille de position" — PAS "ne trade pas".
+
+Tu es en phase d'apprentissage. Les erreurs sont ton carburant. Un trade perdant avec un
+stop-loss à -0.3% te coûte 0.075 USDT sur une position de 25 USDT. C'est le prix d'une leçon.
+Un WAIT ne te coûte rien mais ne t'apprend rien non plus.
 
 Réponds UNIQUEMENT en JSON."""
 
-DECISION_AGENT_LEARNING_ADDENDUM = """
-PHASE D'APPRENTISSAGE : Tu as moins de 30 trades en mémoire. Dans cette phase,
-tu DOIS trader pour apprendre. Les erreurs sont acceptables et même nécessaires —
-chaque trade perdu génère une leçon qui te rend meilleur.
-
-Règles spéciales en phase d'apprentissage :
-- Accepte les trades dès que ta confiance dépasse 50% (au lieu de 70%)
-- Ne cite pas l'absence de données comme raison de WAIT
-- Vise 3-5 trades par jour minimum
-- Préfère un trade risqué qui t'apprend quelque chose à un WAIT qui ne t'apprend rien
-
-Cette phase se désactive automatiquement après 30 trades — tu redeviendras
-conservateur avec une vraie base d'expérience."""
-
 TRADE_DECISION_SCHEMA = {
     "action": "BUY|SELL|WAIT",
-    "confidence": "0.0 à 1.0",
-    "reasoning": "Explication détaillée en 3-5 phrases",
-    "position_size_pct": "0.05 à 0.10 (0 si WAIT)",
-    "expected_holding_time": "5min|15min|1h|4h",
-    "key_factors": ["facteur 1", "facteur 2"],
-    "risks_acknowledged": ["risque 1"],
+    "confidence": "0 à 100",
+    "position_size_pct": "5.0 ou 8.0",
+    "stop_loss_pct": "0.3 ou 1.0",
+    "take_profit_pct": "0.5 ou 1.5",
+    "max_hold_minutes": "30 ou 240",
+    "reasoning": "2-3 phrases max",
 }
-
-
-@dataclass
-class MarketAnalysis:
-    market_regime: str
-    strength: float
-    key_observations: list[str]
-    risks: list[str]
-    relevant_memory: list[str]
-    summary: str
 
 
 @dataclass
@@ -62,9 +57,9 @@ class TradeDecision:
     confidence: float
     reasoning: str
     position_size_pct: float
-    expected_holding_time: str
-    key_factors: list[str]
-    risks_acknowledged: list[str]
+    stop_loss_pct: float
+    take_profit_pct: float
+    max_hold_minutes: int
     quantity: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
@@ -72,47 +67,37 @@ class TradeDecision:
 
 def build_decision_prompt(
     pair: str,
-    signal_score: float,
-    analysis: MarketAnalysis,
+    signal_classification: dict[str, Any],
     indicators: dict[str, float],
     memory: str,
-    recent_trades: str,
     portfolio: dict[str, Any],
 ) -> str:
-    signal_label = "achat fort" if signal_score > 0.5 else "vente forte"
+    ema_direction = "↑" if indicators["ema_9"] > indicators["ema_21"] else "↓"
 
-    return f"""## Décision de trade — {pair}
+    return f"""## Trade — {pair} — Mode: {signal_classification['mode']}
 
-### Signal technique
-Score composite : {signal_score:.4f} ({signal_label})
+### Signal
+{json.dumps(signal_classification, indent=2)}
 
-### Analyse du Market Analyst
-Régime : {analysis.market_regime} (force: {analysis.strength})
-Observations : {', '.join(analysis.key_observations)}
-Risques identifiés : {', '.join(analysis.risks)}
-Résumé : {analysis.summary}
-
-### Indicateurs clés
-RSI: {indicators['rsi_14']:.1f} | MACD hist: {indicators['macd_histogram']:.4f}
-Bollinger %B: {indicators['bb_pct']:.2f} | Volume ratio: {indicators['volume_ratio']:.1f}x
-ATR: {indicators['atr_14']:.2f} | EMA9 vs EMA21: {'↑' if indicators['ema_9'] > indicators['ema_21'] else '↓'}
+### Indicateurs
+RSI: {indicators['rsi_14']:.1f} | MACD hist: {indicators['macd_histogram']:.4f} | BB%: {indicators['bb_pct']:.2f}
+EMA9 vs EMA21: {ema_direction} | Volume: {indicators['volume_ratio']:.1f}x
+ATR: {indicators['atr_14']:.2f} | Prix: {indicators['price']:.2f}
+Variation: 5m={indicators['price_change_5m']:.2f}% | 15m={indicators['price_change_15m']:.2f}% | 1h={indicators['price_change_1h']:.2f}%
 
 ### Portefeuille
-Capital: {portfolio['capital']:.2f} USDT | Positions ouvertes: {portfolio['open_positions']}
-P&L aujourd'hui: {portfolio['daily_pnl']:.2f} USDT ({portfolio['daily_pnl_pct']:.1f}%)
-Drawdown total: {portfolio['drawdown_pct']:.1f}%
+Capital: {portfolio['capital']:.2f} USDT | Positions ouvertes: {portfolio['open_positions']}/{portfolio.get('max_positions', 5)}
+P&L jour: {portfolio['daily_pnl']:.2f} USDT ({portfolio['daily_pnl_pct']:.1f}%)
 
 {memory}
 
-{recent_trades}
-
-Décide. Réponds en JSON :
+Décide. JSON :
 {{
   "action": "BUY|SELL|WAIT",
-  "confidence": 0.0,
-  "reasoning": "Explication détaillée de ta décision en 3-5 phrases",
-  "position_size_pct": 0.0,
-  "expected_holding_time": "5min|15min|1h|4h",
-  "key_factors": ["facteur 1", "facteur 2"],
-  "risks_acknowledged": ["risque 1"]
+  "confidence": 0,
+  "position_size_pct": 5.0,
+  "stop_loss_pct": 0.3,
+  "take_profit_pct": 0.5,
+  "max_hold_minutes": 30,
+  "reasoning": "2-3 phrases max"
 }}"""

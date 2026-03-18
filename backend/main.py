@@ -8,9 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.agents.ai_decision import DecisionAgent
-from backend.agents.ai_market_analyst import MarketAnalystAgent
 from backend.agents.ai_post_trade import PostTradeAgent
-from backend.agents.ai_risk_evaluator import RiskEvaluatorAgent
 from backend.agents.base import AgentMessage
 from backend.agents.data_collector import DataCollector
 from backend.agents.executor import OrderExecutor
@@ -39,9 +37,7 @@ class Orchestrator:
         self.memory: MemoryManager | None = None
         self.data_collector: DataCollector | None = None
         self.signal_analyzer: SignalAnalyzer | None = None
-        self.market_analyst: MarketAnalystAgent | None = None
         self.decision_agent: DecisionAgent | None = None
-        self.risk_evaluator: RiskEvaluatorAgent | None = None
         self.post_trade: PostTradeAgent | None = None
         self.risk_guard: RiskGuard | None = None
         self.executor: OrderExecutor | None = None
@@ -74,13 +70,20 @@ class Orchestrator:
         )
         self.risk_guard = RiskGuard(
             max_position_pct=s.MAX_POSITION_PCT,
-            stop_loss_atr_mult=s.STOP_LOSS_ATR_MULT,
-            take_profit_atr_mult=s.TAKE_PROFIT_ATR_MULT,
-            trailing_stop_atr_mult=s.TRAILING_STOP_ATR_MULT,
             max_open_positions=s.MAX_OPEN_POSITIONS,
             max_positions_per_pair=s.MAX_POSITIONS_PER_PAIR,
             max_daily_loss_pct=s.MAX_DAILY_LOSS_PCT,
             max_total_drawdown_pct=s.MAX_TOTAL_DRAWDOWN_PCT,
+            scalp_max_sl_pct=s.SCALP_MAX_SL_PCT,
+            scalp_max_tp_pct=s.SCALP_MAX_TP_PCT,
+            momentum_max_sl_pct=s.MOMENTUM_MAX_SL_PCT,
+            momentum_max_tp_pct=s.MOMENTUM_MAX_TP_PCT,
+            trailing_stop_activation_pct=s.TRAILING_STOP_ACTIVATION_PCT,
+            trailing_stop_distance_pct=s.TRAILING_STOP_DISTANCE_PCT,
+            pair_cooldown_after_sl_minutes=s.PAIR_COOLDOWN_AFTER_SL_MINUTES,
+            stop_loss_atr_mult=s.STOP_LOSS_ATR_MULT,
+            take_profit_atr_mult=s.TAKE_PROFIT_ATR_MULT,
+            trailing_stop_atr_mult=s.TRAILING_STOP_ATR_MULT,
         )
         self.executor = OrderExecutor(
             binance=self.binance, db=self.db,
@@ -89,9 +92,7 @@ class Orchestrator:
 
         # Agents IA
         model = s.AI_MODEL_FAST
-        self.market_analyst = MarketAnalystAgent(self.claude, self.memory, self.db, model, self.bus)
         self.decision_agent = DecisionAgent(self.claude, self.memory, self.db, model, self.bus)
-        self.risk_evaluator = RiskEvaluatorAgent(self.claude, self.memory, self.db, model, self.bus)
         self.post_trade = PostTradeAgent(self.claude, self.memory, self.db, model, self.bus)
 
         logger.info("Orchestrator setup OK — mode {} / {}", s.TRADING_MODE, "testnet" if s.BINANCE_TESTNET else "LIVE")
@@ -162,36 +163,126 @@ class Orchestrator:
         await self.signal_analyzer.analyze(pair, df, orderbook)
 
     async def _on_signal(self, msg: AgentMessage) -> None:
-        """Signal fort détecté → chaîne IA complète."""
+        """Signal détecté → classify → SCALP direct Python OU MOMENTUM via IA."""
         pair = msg.data.get("pair", "")
         score = msg.data.get("score", 0)
         indicators = msg.data.get("indicators", {})
-        orderbook = msg.data.get("orderbook", {})
 
         if self.risk_guard.is_killed:
             logger.warning("Signal {} ignoré — kill switch actif", pair)
             return
 
-        logger.info("Signal {} score={:.3f} — lancement chaîne IA", pair, score)
+        # Nettoyer les cooldowns expirés
+        self.risk_guard.clear_expired_cooldowns()
 
-        # Broadcast "thinking" au dashboard
-        await self._broadcast_ws(AgentMessage(
-            type="thinking", data={"agent": "market_analyst", "status": "reasoning", "pair": pair},
-            source="orchestrator",
-        ))
+        # 1. Classifier le signal (SCALP / MOMENTUM / NO_SIGNAL)
+        signal_classification = self.signal_analyzer.classify_signal(pair, indicators, score)
+        mode = signal_classification["mode"]
 
-        # 1. Market Analyst
-        analysis = await self.market_analyst.analyze(pair, indicators, orderbook)
-        if analysis is None:
+        if mode == "NO_SIGNAL":
             return
 
-        # 2. Decision Agent
+        if mode.startswith("SCALP_"):
+            await self._handle_scalp(pair, mode, indicators, score, signal_classification)
+        elif mode.startswith("MOMENTUM_"):
+            await self._handle_momentum(pair, indicators, score, signal_classification)
+
+    # ─── SCALP : exécution directe Python (pas d'appel IA) ──────────
+
+    async def _handle_scalp(
+        self, pair: str, mode: str, indicators: dict, score: float,
+        signal: dict,
+    ) -> None:
+        """Scalp = décision purement Python → Risk Guard → Executor."""
+        price = indicators.get("price", 0)
+        portfolio = await self._get_portfolio_state()
+
+        if mode == "SCALP_LONG":
+            action = "BUY"
+            sl_pct = signal["stop_loss_pct"]
+            tp_pct = signal["take_profit_pct"]
+            pos_pct = signal["position_size_pct"] / 100  # 5.0% → 0.05
+
+            stop_loss = round(price * (1 - sl_pct / 100), 2)
+            take_profit = round(price * (1 + tp_pct / 100), 2)
+
+            reasoning = (
+                f"Scalp auto: RSI9={indicators['rsi_9']:.1f}, "
+                f"BB%={indicators['bb_pct']:.2f}, Vol={indicators['volume_ratio']:.1f}x"
+            )
+
+            logger.info("SCALP_AUTO {} — {} @ {:.2f} (RSI9={:.0f} BB%={:.2f})",
+                         pair, action, price, indicators["rsi_9"], indicators["bb_pct"])
+
+        elif mode == "SCALP_SHORT_EXIT":
+            # Vendre si on a une position ouverte sur cette paire
+            open_trade = await self.db.fetchone(
+                "SELECT * FROM trades WHERE pair = ? AND status = 'open' AND side = 'BUY'",
+                (pair,),
+            )
+            if open_trade:
+                logger.info("SCALP_EXIT {} — fermeture position ouverte (RSI9={:.0f})",
+                             pair, indicators["rsi_9"])
+                await self.executor._close_position(
+                    dict(open_trade), price, "closed_scalp_exit"
+                )
+            return
+        else:
+            return
+
+        # Risk Guard
+        pair_open = await self.db.fetchone(
+            "SELECT COUNT(*) as cnt FROM trades WHERE pair = ? AND status = 'open'",
+            (pair,),
+        )
+        portfolio["pair_positions"] = pair_open["cnt"] if pair_open else 0
+
+        guard_decision = {
+            "pair": pair,
+            "action": action,
+            "position_size_pct": pos_pct,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "quantity": self.risk_guard.compute_quantity(portfolio["capital"], pos_pct, price),
+            "entry_price": price,
+        }
+
+        check = self.risk_guard.check(guard_decision, portfolio)
+        if not check.approved:
+            logger.warning("RiskGuard SCALP {} : REJETÉ — {}", pair, check.reason)
+            return
+
+        # Executor
+        exec_decision = {
+            "pair": pair,
+            "action": action,
+            "quantity": guard_decision["quantity"],
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "signal_score": score,
+            "decision_reasoning": reasoning,
+            "indicators_snapshot": indicators,
+            "max_hold_minutes": signal["max_hold_minutes"],
+            "trade_mode": "SCALP_AUTO",
+        }
+        await self.executor.execute(exec_decision)
+
+    # ─── MOMENTUM : Decision Agent IA ────────────────────────────────
+
+    async def _handle_momentum(
+        self, pair: str, indicators: dict, score: float,
+        signal_classification: dict,
+    ) -> None:
+        """Momentum = appel IA Decision Agent → Risk Guard → Executor."""
+        logger.info("MOMENTUM_IA {} score={:.3f} — appel Decision Agent", pair, score)
+
         await self._broadcast_ws(AgentMessage(
             type="thinking", data={"agent": "decision", "status": "reasoning", "pair": pair},
             source="orchestrator",
         ))
+
         portfolio = await self._get_portfolio_state()
-        decision = await self.decision_agent.decide(pair, score, analysis, indicators, portfolio)
+        decision = await self.decision_agent.decide(pair, signal_classification, indicators, portfolio)
         if decision is None:
             return
 
@@ -199,23 +290,11 @@ class Orchestrator:
             logger.info("Decision {} : WAIT — aucune action", pair)
             return
 
-        # 3. Risk Evaluator
-        await self._broadcast_ws(AgentMessage(
-            type="thinking", data={"agent": "risk_evaluator", "status": "reasoning", "pair": pair},
-            source="orchestrator",
-        ))
-        verdict = await self.risk_evaluator.evaluate(pair, decision, analysis, indicators, portfolio)
-        if verdict is None or verdict.verdict == "REJECT":
-            logger.info("RiskEvaluator {} : REJECT — trade annulé", pair)
-            return
-
-        # Appliquer l'ajustement de position
-        final_pct = verdict.adjusted_position_pct
-        atr = indicators.get("atr_14", 300)
+        # Risk Guard
         price = indicators.get("price", 0)
+        stop_loss = price * (1 - decision.stop_loss_pct / 100) if decision.action == "BUY" else price * (1 + decision.stop_loss_pct / 100)
+        take_profit = price * (1 + decision.take_profit_pct / 100) if decision.action == "BUY" else price * (1 - decision.take_profit_pct / 100)
 
-        # 4. Risk Guard (Python, inviolable)
-        # Compter les positions ouvertes sur cette paire
         pair_open = await self.db.fetchone(
             "SELECT COUNT(*) as cnt FROM trades WHERE pair = ? AND status = 'open'",
             (pair,),
@@ -225,19 +304,19 @@ class Orchestrator:
         guard_decision = {
             "pair": pair,
             "action": decision.action,
-            "position_size_pct": final_pct,
-            "stop_loss": self.risk_guard.compute_stop_loss(price, decision.action, atr),
-            "take_profit": self.risk_guard.compute_take_profit(price, decision.action, atr),
-            "quantity": self.risk_guard.compute_quantity(portfolio["capital"], final_pct, price),
+            "position_size_pct": decision.position_size_pct,
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
+            "quantity": self.risk_guard.compute_quantity(portfolio["capital"], decision.position_size_pct, price),
             "entry_price": price,
         }
 
         check = self.risk_guard.check(guard_decision, portfolio)
         if not check.approved:
-            logger.warning("RiskGuard {} : REJETÉ — {}", pair, check.reason)
+            logger.warning("RiskGuard MOMENTUM {} : REJETÉ — {}", pair, check.reason)
             return
 
-        # 5. Executor
+        # Executor
         exec_decision = {
             "pair": pair,
             "action": decision.action,
@@ -245,10 +324,10 @@ class Orchestrator:
             "stop_loss": guard_decision["stop_loss"],
             "take_profit": guard_decision["take_profit"],
             "signal_score": score,
-            "market_analysis": analysis.summary,
             "decision_reasoning": decision.reasoning,
-            "risk_evaluation": verdict.reasoning,
             "indicators_snapshot": indicators,
+            "max_hold_minutes": decision.max_hold_minutes,
+            "trade_mode": "MOMENTUM_IA",
         }
         await self.executor.execute(exec_decision)
 
