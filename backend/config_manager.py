@@ -29,8 +29,11 @@ class ConfigManager:
 
     def __init__(self, path: str | None = None) -> None:
         if path is None:
-            base = os.path.dirname(os.path.abspath(__file__))
-            path = os.path.join(base, "config.json")
+            # config.json dans data/ (writable) — même répertoire que la DB SQLite
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            data_dir = os.path.join(project_root, "data")
+            os.makedirs(data_dir, exist_ok=True)
+            path = os.path.join(data_dir, "config.json")
 
         self.path = path
         self.fallback_path = path + ".last_valid"

@@ -165,6 +165,12 @@ class Orchestrator:
         """Lance le data collector, l'executor monitor, le regime loop et le dispatcher."""
         self._running = True
         await self.data_collector.start()
+
+        # Charger les candles 1H historiques via REST pour le RegimeDetector (ADX)
+        # Le WebSocket ne couvre que 1m/5m/15m — sans cet appel, le RegimeDetector
+        # n'a aucune donnée 1H et ne peut pas calculer l'ADX.
+        await self.data_collector.load_historical_candles("BTCUSDT", "1h", limit=200)
+
         await self.executor.start()
         await self.news_scraper.start()
         self._regime_task = asyncio.create_task(self._regime_loop())

@@ -42,6 +42,39 @@ class DataCollector(BaseAgent):
         self.prices: dict[str, float] = {}
         self._ws_tasks: list[asyncio.Task] = []
 
+    async def load_historical_candles(
+        self, symbol: str, interval: str, limit: int = 200
+    ) -> int:
+        """Charge les candles historiques via REST API Binance et les insère dans SQLite.
+
+        Utile pour les intervalles non couverts par WebSocket (ex: 1h pour le RegimeDetector).
+        Retourne le nombre de candles insérées.
+        """
+        try:
+            klines = await self.binance.get_klines(symbol, interval, limit=limit)
+        except Exception as e:
+            logger.error("load_historical_candles {} {} erreur: {}", symbol, interval, e)
+            return 0
+
+        inserted = 0
+        for candle in klines:
+            await self.db.execute(
+                """INSERT OR IGNORE INTO candles
+                   (pair, interval, open_time, open, high, low, close, volume,
+                    close_time, quote_volume, trades_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    symbol, interval, candle["open_time"],
+                    candle["open"], candle["high"], candle["low"], candle["close"],
+                    candle["volume"], candle["close_time"], candle["quote_volume"],
+                    candle["trades_count"],
+                ),
+            )
+            inserted += 1
+
+        logger.info("load_historical_candles: {} candles {} {} insérées", inserted, symbol, interval)
+        return inserted
+
     async def start(self) -> None:
         """Lance les streams WebSocket pour chaque paire."""
         await super().start()
