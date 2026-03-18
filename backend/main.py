@@ -321,7 +321,8 @@ class Orchestrator:
             self.config_manager.reload()
 
         except Exception as e:
-            logger.error("RegimeAdvisor erreur: {}", e)
+            import traceback
+            logger.error("RegimeAdvisor erreur: {}\n{}", e, traceback.format_exc())
 
     # ─── Dispatcher ───────────────────────────────────────────────────
 

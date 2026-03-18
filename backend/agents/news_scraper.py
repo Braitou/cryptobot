@@ -135,8 +135,10 @@ class NewsScraper:
         # Fear & Greed
         fg = self.get_fear_greed()
         if fg is not None:
-            fg_data = self._latest.get("fear_greed", {}).get("data", [{}])[0]
-            label = fg_data.get("value_classification", "?")
+            fg_raw = self._latest.get("fear_greed", {})
+            fg_list = fg_raw.get("data") if isinstance(fg_raw, dict) else None
+            fg_data = fg_list[0] if isinstance(fg_list, list) and fg_list else {}
+            label = fg_data.get("value_classification", "?") if isinstance(fg_data, dict) else "?"
             lines.append(f"Fear & Greed: {fg}/100 ({label})")
 
         # Funding rates
@@ -148,10 +150,14 @@ class NewsScraper:
 
         # Top news headlines
         cc = self._latest.get("cryptocompare", {})
-        articles = cc.get("Data", [])[:3]
+        if not isinstance(cc, dict):
+            cc = {}
+        articles_raw = cc.get("Data")
+        articles = articles_raw[:3] if isinstance(articles_raw, list) else []
         if articles:
             lines.append("Top news:")
             for a in articles:
-                lines.append(f"  - {a.get('title', '?')[:80]}")
+                title = a.get("title", "?") if isinstance(a, dict) else str(a)
+                lines.append(f"  - {title[:80]}")
 
         return "\n".join(lines) if lines else "Aucune donnée disponible"
