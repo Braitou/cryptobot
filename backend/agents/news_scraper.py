@@ -161,3 +161,42 @@ class NewsScraper:
                 lines.append(f"  - {title[:80]}")
 
         return "\n".join(lines) if lines else "Aucune donnée disponible"
+
+    def get_structured_summary(self) -> dict[str, Any]:
+        """Retourne un résumé structuré (dict) pour le dashboard."""
+        result: dict[str, Any] = {"fear_greed": None, "funding_rates": {}, "headlines": []}
+
+        # Fear & Greed
+        fg = self.get_fear_greed()
+        if fg is not None:
+            fg_raw = self._latest.get("fear_greed", {})
+            fg_list = fg_raw.get("data") if isinstance(fg_raw, dict) else None
+            fg_data = fg_list[0] if isinstance(fg_list, list) and fg_list else {}
+            label = fg_data.get("value_classification", "?") if isinstance(fg_data, dict) else "?"
+            result["fear_greed"] = {"value": fg, "label": label}
+
+        # Funding rates
+        for pair in FUNDING_PAIRS:
+            fr = self._latest.get(f"funding_{pair}")
+            if fr and isinstance(fr, list) and len(fr) > 0:
+                try:
+                    rate = float(fr[0].get("fundingRate", 0)) * 100
+                    result["funding_rates"][pair] = round(rate, 4)
+                except (TypeError, ValueError):
+                    pass
+
+        # Headlines
+        cc = self._latest.get("cryptocompare", {})
+        if not isinstance(cc, dict):
+            cc = {}
+        articles_raw = cc.get("Data")
+        articles = articles_raw[:5] if isinstance(articles_raw, list) else []
+        for a in articles:
+            if isinstance(a, dict):
+                result["headlines"].append({
+                    "title": a.get("title", "?")[:120],
+                    "source": a.get("source_info", {}).get("name", "?") if isinstance(a.get("source_info"), dict) else "?",
+                    "url": a.get("url", ""),
+                })
+
+        return result

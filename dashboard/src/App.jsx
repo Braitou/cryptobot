@@ -17,6 +17,12 @@ import KillSwitch from './components/KillSwitch'
 
 const MAX_FEED_EVENTS = 200
 
+const FILTER_LABELS = {
+  atr_low: 'ATR trop bas',
+  micro_trend: 'Micro-trend contraire',
+  regime_off: 'Regime inactif',
+}
+
 function wsMessageToFeedEvent(msg) {
   const ts = msg.timestamp || new Date().toISOString()
   const pair = msg.data?.pair || ''
@@ -24,47 +30,97 @@ function wsMessageToFeedEvent(msg) {
   switch (msg.type) {
     case 'candle_closed':
       return {
-        timestamp: ts, agent: 'candle', pair,
+        timestamp: ts, eventType: 'candle', pair,
         text: `${pair} ${msg.data?.interval} close=${msg.data?.close?.toFixed(2)}`,
       }
+
     case 'signal':
       return {
-        timestamp: ts, agent: 'signal_analyzer', pair,
-        text: `Signal ${pair} score ${msg.data?.score >= 0 ? '+' : ''}${msg.data?.score?.toFixed(3)}`,
+        timestamp: ts, eventType: 'signal', pair,
+        text: `Signal detecte: score ${msg.data?.score >= 0 ? '+' : ''}${msg.data?.score?.toFixed(3)}`,
       }
+
+    case 'signal_filtered': {
+      const reason = msg.data?.reason || 'unknown'
+      const label = FILTER_LABELS[reason] || reason
+      return {
+        timestamp: ts, eventType: 'signal_filtered', pair,
+        text: `Signal filtre: ${label} (score ${msg.data?.score?.toFixed(3) || '?'})`,
+      }
+    }
+
+    case 'signal_blocked': {
+      const guard = msg.data?.guard || ''
+      const reason = msg.data?.reason || ''
+      return {
+        timestamp: ts, eventType: 'signal_blocked', pair,
+        text: `Signal bloque par ${guard}: ${reason}`,
+      }
+    }
+
     case 'thinking':
       return {
-        timestamp: ts, agent: msg.data?.agent || 'system', pair,
-        type: 'thinking',
+        timestamp: ts, eventType: 'thinking', pair,
         text: `${msg.data?.agent || 'Agent'} raisonne sur ${pair}...`,
       }
+
     case 'decision_made':
       return {
-        timestamp: ts, agent: 'decision', pair,
-        verdict: msg.data?.action,
+        timestamp: ts, eventType: 'signal', pair,
+        badge: msg.data?.action,
+        badgeStyle: msg.data?.action === 'BUY'
+          ? 'bg-emerald-500/30 text-emerald-300 border-emerald-400/50'
+          : msg.data?.action === 'SELL'
+            ? 'bg-red-500/30 text-red-300 border-red-400/50'
+            : 'bg-slate-500/30 text-slate-200 border-slate-400/40',
         text: msg.data?.reasoning || `Decision: ${msg.data?.action}`,
       }
+
     case 'order_executed':
       return {
-        timestamp: ts, agent: 'executor', pair: msg.data?.pair,
-        text: `Trade #${msg.data?.trade_id} ouvert -- ${msg.data?.side} ${msg.data?.pair} @ ${msg.data?.entry_price?.toFixed(2)}`,
+        timestamp: ts, eventType: 'order_executed', pair: msg.data?.pair,
+        text: `Trade #${msg.data?.trade_id} ouvert — ${msg.data?.side} @ ${msg.data?.entry_price?.toFixed(2)}`,
       }
-    case 'order_closed':
+
+    case 'order_closed': {
+      const pnl = msg.data?.pnl || 0
+      const pnlPct = msg.data?.pnl_pct
       return {
-        timestamp: ts, agent: 'executor', pair: msg.data?.pair,
-        verdict: msg.data?.pnl >= 0 ? 'APPROVE' : 'REJECT',
-        text: `Trade #${msg.data?.trade_id} ferme -- ${msg.data?.reason} -- P&L ${msg.data?.pnl_pct >= 0 ? '+' : ''}${msg.data?.pnl_pct?.toFixed(2)}%`,
+        timestamp: ts,
+        eventType: pnl >= 0 ? 'order_closed_win' : 'order_closed_loss',
+        pair: msg.data?.pair,
+        text: `Trade #${msg.data?.trade_id} ferme — ${msg.data?.reason} — P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct?.toFixed(2)}%`,
       }
+    }
+
     case 'regime_change':
       return {
-        timestamp: ts, agent: 'regime_detector',
-        text: `Regime: ${msg.data?.old} -> ${msg.data?.new}`,
+        timestamp: ts, eventType: 'regime_change',
+        text: `Regime: ${msg.data?.old} \u2192 ${msg.data?.new}`,
       }
+
+    case 'ia_regime_advisor': {
+      const action = msg.data?.action || 'HOLD'
+      const confidence = msg.data?.confidence ?? '?'
+      const reasoning = msg.data?.reasoning || ''
+      return {
+        timestamp: ts, eventType: 'ia_regime_advisor',
+        badge: action,
+        badgeStyle: action === 'HOLD'
+          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
+          : action === 'OVERRIDE_REGIME'
+            ? 'bg-red-500/20 text-red-300 border-red-400/30'
+            : 'bg-amber-500/20 text-amber-300 border-amber-400/30',
+        text: `${action} (conf ${confidence}%)${reasoning ? ` — ${reasoning}` : ''}`,
+      }
+    }
+
     case 'trade_tagged':
       return {
-        timestamp: ts, agent: 'post_trade_logger',
+        timestamp: ts, eventType: 'trade_tagged',
         text: `Tags: ${(msg.data?.tags || []).join(', ')}`,
       }
+
     default:
       return null
   }
@@ -77,7 +133,7 @@ function getWsUrl() {
 export default function App() {
   const {
     portfolio, trades, agentsCosts, config,
-    signalStats, guards, openPositions, aiFeed, signals,
+    signalStats, guards, openPositions, aiFeed, signals, news,
     refetch,
   } = usePortfolio()
 
@@ -91,7 +147,7 @@ export default function App() {
   const refetchRef = useRef(refetch)
   useEffect(() => { refetchRef.current = refetch }, [refetch])
 
-  // Charger l'historique du feed + prix au démarrage
+  // Charger l'historique du feed + prix au demarrage
   useEffect(() => {
     fetch('/api/feed')
       .then(r => r.ok ? r.json() : [])
@@ -152,6 +208,7 @@ export default function App() {
             case 'order_closed':
             case 'trade_tagged':
             case 'regime_change':
+            case 'ia_regime_advisor':
               refetchRef.current()
               break
           }
@@ -189,7 +246,7 @@ export default function App() {
       />
 
       <main className="flex-1 flex flex-col gap-4 py-4">
-        {/* Section 2 - Métriques (6 cartes) */}
+        {/* Section 2 - Metriques (6 cartes) */}
         <MetricCards portfolio={portfolio} trades={trades} agentCosts={agentsCosts} />
 
         {/* Tab bar */}
@@ -232,7 +289,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Section 4 - Panneaux opérationnels (4 colonnes) */}
+            {/* Section 4 - Panneaux operationnels (4 colonnes) */}
             <div className="px-6 grid grid-cols-2 lg:grid-cols-4 gap-3">
               <RegimePanel config={config} />
               <AtrPanel signals={signals} />
@@ -243,13 +300,13 @@ export default function App() {
             {/* Section 5 - Positions ouvertes (conditionnel) */}
             <OpenPositions positions={openPositions} />
 
-            {/* Section 6 - Trades récents + Cerveau IA (60/40) */}
+            {/* Section 6 - Trades recents + Cerveau IA (60/40) */}
             <div className="px-6 grid grid-cols-1 lg:grid-cols-5 gap-4">
               <div className="lg:col-span-3">
                 <TradeHistory trades={trades} />
               </div>
               <div className="lg:col-span-2">
-                <AIFeed aiFeed={aiFeed} />
+                <AIFeed aiFeed={aiFeed} news={news} />
               </div>
             </div>
           </>

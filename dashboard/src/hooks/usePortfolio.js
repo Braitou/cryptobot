@@ -12,6 +12,7 @@ export default function usePortfolio() {
   const [openPositions, setOpenPositions] = useState([])
   const [aiFeed, setAiFeed] = useState([])
   const [signals, setSignals] = useState({})
+  const [news, setNews] = useState(null)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -25,8 +26,9 @@ export default function usePortfolio() {
         fetch(`${API}/open_positions`),
         fetch(`${API}/ai_feed?limit=30`),
         fetch(`${API}/signals`),
+        fetch(`${API}/news_summary`),
       ]
-      const [pRes, tRes, cRes, cfgRes, ssRes, gRes, opRes, aiRes, sigRes] = await Promise.all(endpoints)
+      const [pRes, tRes, cRes, cfgRes, ssRes, gRes, opRes, aiRes, sigRes, newsRes] = await Promise.all(endpoints)
 
       if (pRes.ok) setPortfolio(await pRes.json())
       if (tRes.ok) setTrades(await tRes.json())
@@ -37,6 +39,7 @@ export default function usePortfolio() {
       if (opRes.ok) setOpenPositions(await opRes.json())
       if (aiRes.ok) setAiFeed(await aiRes.json())
       if (sigRes.ok) setSignals(await sigRes.json())
+      if (newsRes.ok) setNews(await newsRes.json())
     } catch (e) {
       // backend not available yet
     }
@@ -50,7 +53,7 @@ export default function usePortfolio() {
 
   return {
     portfolio, trades, agentsCosts, config,
-    signalStats, guards, openPositions, aiFeed, signals,
+    signalStats, guards, openPositions, aiFeed, signals, news,
     refetch: fetchAll,
   }
 }

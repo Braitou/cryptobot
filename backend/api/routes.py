@@ -235,6 +235,12 @@ def create_router(get_orchestrator: Callable) -> APIRouter:
             (limit,),
         )
 
+    @router.get("/news_summary")
+    async def get_news_summary() -> dict[str, Any]:
+        """Retourne le résumé structuré du dernier scrape NewsScraper."""
+        o = _orch()
+        return o.news_scraper.get_structured_summary() if o.news_scraper else {}
+
     @router.get("/feed")
     async def get_feed() -> list[dict[str, Any]]:
         """Retourne les 100 derniers events pour le Live Feed."""

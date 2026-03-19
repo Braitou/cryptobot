@@ -309,7 +309,7 @@ class Orchestrator:
             regime = self.config_manager.get_active_regime()
             regime_info = self.regime_detector.regime_info
 
-            await self.regime_advisor.advise(
+            result = await self.regime_advisor.advise(
                 current_regime=regime,
                 regime_info=regime_info,
                 news_summary=news_summary,
@@ -319,6 +319,21 @@ class Orchestrator:
 
             # Recharger la config après l'écriture éventuelle par le Regime Advisor
             self.config_manager.reload()
+
+            # Broadcast le résultat au dashboard
+            if result:
+                await self._broadcast_ws(AgentMessage(
+                    type="ia_regime_advisor",
+                    data={
+                        "action": result.get("action", "HOLD"),
+                        "confidence": result.get("confidence", 0),
+                        "reasoning": result.get("reasoning", ""),
+                        "regime_override": result.get("regime_override"),
+                        "position_multiplier": result.get("position_multiplier"),
+                        "trigger": trigger_reason,
+                    },
+                    source="regime_advisor",
+                ))
 
         except Exception as e:
             import traceback
@@ -389,11 +404,22 @@ class Orchestrator:
 
         if mode == "NO_SIGNAL":
             # Déterminer la raison du filtrage pour les stats
-            atr_pct = indicators.get("atr_14", 0) / indicators.get("price", 1) if indicators.get("price", 0) > 0 else 0
-            if atr_pct < self.signal_analyzer.MIN_ATR_PCT:
-                self.signal_stats["filtered_atr_low"] += 1
+            filter_reason = signal_classification.get("filter_reason", "")
+            if filter_reason == "micro_trend":
+                self.signal_stats["filtered_micro_trend"] += 1
             else:
-                self.signal_stats["filtered_regime_off"] += 1
+                atr_pct = indicators.get("atr_14", 0) / indicators.get("price", 1) if indicators.get("price", 0) > 0 else 0
+                if atr_pct < self.signal_analyzer.MIN_ATR_PCT:
+                    self.signal_stats["filtered_atr_low"] += 1
+                    filter_reason = filter_reason or "atr_low"
+                else:
+                    self.signal_stats["filtered_regime_off"] += 1
+                    filter_reason = filter_reason or "regime_off"
+            await self._broadcast_ws(AgentMessage(
+                type="signal_filtered",
+                data={"pair": pair, "score": score, "reason": filter_reason, "regime": regime},
+                source="signal_analyzer",
+            ))
             return
 
         if mode.startswith("SCALP_"):
@@ -471,6 +497,11 @@ class Orchestrator:
         if not corr_ok:
             self.signal_stats["blocked_correlation"] += 1
             logger.warning("CorrelationGuard SCALP {} : REJETÉ — {}", pair, corr_reason)
+            await self._broadcast_ws(AgentMessage(
+                type="signal_blocked",
+                data={"pair": pair, "score": score, "reason": f"correlation: {corr_reason}", "guard": "correlation"},
+                source="correlation_guard",
+            ))
             return
 
         # Risk Guard
@@ -494,6 +525,11 @@ class Orchestrator:
         if not check.approved:
             self.signal_stats["blocked_risk_guard"] += 1
             logger.warning("RiskGuard SCALP {} : REJETÉ — {}", pair, check.reason)
+            await self._broadcast_ws(AgentMessage(
+                type="signal_blocked",
+                data={"pair": pair, "score": score, "reason": f"risk_guard: {check.reason}", "guard": "risk_guard"},
+                source="risk_guard",
+            ))
             return
 
         self.signal_stats["executed"] += 1

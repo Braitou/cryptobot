@@ -310,6 +310,7 @@ class SignalAnalyzer(BaseAgent):
                     allowed, reason = self.scalp_entry_allowed(indicators, "BUY")
                     if not allowed:
                         logger.info("Scalp LONG {} bloqué: {}", pair, reason)
+                        return {"mode": "NO_SIGNAL", "filter_reason": "micro_trend"}
                     else:
                         levels = self.calculate_trade_levels(price, atr, preset, "scalp")
                         return {
