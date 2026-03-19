@@ -4,18 +4,32 @@ import { useState, useEffect } from 'react'
 
 const ACTION_CONFIG = {
   HOLD:              { icon: '\u{1F7E2}', label: 'HOLD',       bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400' },
-  OVERRIDE_REGIME:   { icon: '\u{1F534}', label: 'OVERRIDE',   bg: 'bg-red-500/10',     border: 'border-red-500/30',     text: 'text-red-400' },
+  CONFIRM:           { icon: '\u{1F7E2}', label: 'CONFIRM',    bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400' },
+  OVERRIDE_REGIME:   { icon: '\u{1F535}', label: 'OVERRIDE',   bg: 'bg-blue-500/10',    border: 'border-blue-500/30',    text: 'text-blue-400' },
   ADJUST_MULTIPLIER: { icon: '\u{1F7E1}', label: 'ADJUST',     bg: 'bg-amber-500/10',   border: 'border-amber-500/30',   text: 'text-amber-400' },
   PAUSE:             { icon: '\u{1F534}', label: 'PAUSE',       bg: 'bg-red-500/10',     border: 'border-red-500/30',     text: 'text-red-400' },
 }
 
-function parseEntry(entry) {
-  try {
-    if (entry.response_received) {
-      return JSON.parse(entry.response_received)
-    }
-  } catch { /* ignore */ }
+function extractJson(text) {
+  if (!text) return null
+  // Direct parse
+  try { return JSON.parse(text) } catch { /* continue */ }
+  // Extract from ```json ... ```
+  const fenced = text.match(/```json\s*([\s\S]*?)```/)
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()) } catch { /* continue */ }
+  }
+  // Extract first { ... last }
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first !== -1 && last > first) {
+    try { return JSON.parse(text.slice(first, last + 1)) } catch { /* continue */ }
+  }
   return null
+}
+
+function parseEntry(entry) {
+  return extractJson(entry.response_received)
 }
 
 function RegimeAdvisorCard({ entry }) {
@@ -26,6 +40,7 @@ function RegimeAdvisorCard({ entry }) {
   const cfg = ACTION_CONFIG[action] || ACTION_CONFIG.HOLD
   const confidence = data.confidence ?? '?'
   const reasoning = data.reasoning || data.summary || ''
+  const newsFactors = Array.isArray(data.news_factors) ? data.news_factors : []
   const time = entry.timestamp
     ? new Date(entry.timestamp).toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit' })
     : ''
@@ -54,6 +69,16 @@ function RegimeAdvisorCard({ entry }) {
       </div>
       {reasoning && (
         <p className="text-xs text-slate-400 italic leading-relaxed">"{reasoning}"</p>
+      )}
+
+      {newsFactors.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {newsFactors.map((f, i) => (
+            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-700/50 text-slate-300 border-slate-600">
+              {typeof f === 'string' ? f : f.factor || f.name || JSON.stringify(f)}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -213,11 +238,39 @@ function VeilleMarche({ news }) {
 
 // ─── Main Component ──────────────────────────────────────────────────
 
+function FallbackCard({ entry }) {
+  const time = entry.timestamp
+    ? new Date(entry.timestamp).toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit' })
+    : ''
+  const agent = entry.agent || '?'
+  const text = entry.response_received
+    ? entry.response_received.slice(0, 200) + (entry.response_received.length > 200 ? '...' : '')
+    : '--'
+
+  return (
+    <div className="p-3 rounded-lg border bg-slate-800/30 border-slate-700/50">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-bold text-slate-500">{agent}</span>
+        <span className="text-[10px] text-slate-600 font-mono">{time}</span>
+      </div>
+      <p className="text-[10px] text-slate-500 break-all leading-relaxed">{text}</p>
+    </div>
+  )
+}
+
+function AICard({ entry }) {
+  const data = parseEntry(entry)
+  if (entry.agent === 'regime_advisor' && data) {
+    return <RegimeAdvisorCard entry={entry} />
+  }
+  if (entry.agent === 'post_trade_logger' && data) {
+    return <PostTradeCard entry={entry} />
+  }
+  return <FallbackCard entry={entry} />
+}
+
 export default function AIFeed({ aiFeed, news }) {
   const entries = aiFeed || []
-
-  const advisorEntries = entries.filter(e => e.agent === 'regime_advisor')
-  const postTradeEntries = entries.filter(e => e.agent === 'post_trade_logger')
 
   return (
     <div className="space-y-4">
@@ -234,23 +287,9 @@ export default function AIFeed({ aiFeed, news }) {
           {entries.length === 0 ? (
             <div className="text-xs text-slate-500 py-2">Aucune activite IA</div>
           ) : (
-            <>
-              {/* Regime Advisor entries */}
-              {advisorEntries.slice(0, 5).map((entry, i) => (
-                <RegimeAdvisorCard key={`ra-${i}`} entry={entry} />
-              ))}
-
-              {/* Post-Trade entries */}
-              {postTradeEntries.slice(0, 5).map((entry, i) => (
-                <PostTradeCard key={`pt-${i}`} entry={entry} />
-              ))}
-
-              {entries.length > 10 && (
-                <div className="text-[10px] text-slate-600 text-center pt-1">
-                  {entries.length} entrees au total
-                </div>
-              )}
-            </>
+            entries.slice(0, 15).map((entry, i) => (
+              <AICard key={i} entry={entry} />
+            ))
           )}
         </div>
       </div>
