@@ -265,7 +265,7 @@ class SignalAnalyzer(BaseAgent):
     # ─── Classification du signal (v4 — lit le preset) ────────────────
 
     # Seuil minimum d'ATR : en dessous, les frais fixes mangent tout le R:R
-    MIN_ATR_PCT = 0.004  # 0.40% — en dessous, pas de trade
+    MIN_ATR_PCT = 0.003  # 0.30% — en dessous, pas de trade
 
     def classify_signal(
         self, pair: str, indicators: dict[str, float], score: float,
@@ -287,6 +287,14 @@ class SignalAnalyzer(BaseAgent):
                 pair, atr_pct * 100, self.MIN_ATR_PCT * 100,
             )
             return {"mode": "NO_SIGNAL"}
+
+        # Tag low_atr : ATR entre 0.30% et 0.40% — à comparer avec trades ATR > 0.40%
+        is_low_atr = atr_pct < 0.004
+        if is_low_atr:
+            logger.info(
+                "Signal {} low_atr: ATR={:.4f}% (entre 0.30% et 0.40%), trade tagué pour suivi",
+                pair, atr_pct * 100,
+            )
 
         # ─── SCALP ───
         if preset.get("scalp_enabled", False):
@@ -318,6 +326,7 @@ class SignalAnalyzer(BaseAgent):
                             "urgency": "HIGH",
                             "position_size_pct": preset.get("scalp_position_size_pct", 5.0),
                             "max_hold_minutes": preset.get("scalp_max_hold_minutes", 30),
+                            "low_atr": is_low_atr,
                             **levels,
                         }
 
@@ -327,6 +336,7 @@ class SignalAnalyzer(BaseAgent):
                         "mode": "SCALP_SHORT_EXIT",
                         "urgency": "HIGH",
                         "target_action": "SELL_IF_HOLDING",
+                        "low_atr": is_low_atr,
                     }
 
         # ─── MOMENTUM ───
@@ -342,6 +352,7 @@ class SignalAnalyzer(BaseAgent):
                     "urgency": "MEDIUM",
                     "position_size_pct": preset.get("momentum_position_size_pct", 8.0),
                     "max_hold_minutes": preset.get("momentum_max_hold_minutes", 240),
+                    "low_atr": is_low_atr,
                     **levels,
                 }
 
